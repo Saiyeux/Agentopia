@@ -105,6 +105,17 @@ export type LlmModel = {
   size?: number | null;
 };
 
+export type PromptMeta = {
+  id: string;
+  title: string;
+  filename: string;
+  description: string;
+};
+
+export type PromptDocument = PromptMeta & {
+  content: string;
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
 async function getJson<T>(path: string): Promise<T> {
@@ -169,6 +180,10 @@ export function resetCharacters(): Promise<Record<string, unknown>> {
   return postJson<Record<string, unknown>>("/api/dev/reset-characters");
 }
 
+export function resetWorld(): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/api/dev/reset-world");
+}
+
 export function fetchLlmSettings(): Promise<LlmSettings> {
   return getJson<LlmSettings>("/api/llm/settings");
 }
@@ -183,4 +198,22 @@ export function fetchLlmModels(): Promise<{ status: string; settings: LlmSetting
 
 export function testLlmConnection(): Promise<Record<string, unknown>> {
   return postJson<Record<string, unknown>>("/api/llm/test");
+}
+
+export function fetchPrompts(): Promise<{ prompts: PromptMeta[] }> {
+  return getJson<{ prompts: PromptMeta[] }>("/api/prompts");
+}
+
+export function fetchPrompt(promptId: string): Promise<PromptDocument> {
+  return getJson<PromptDocument>(`/api/prompts/${encodeURIComponent(promptId)}`);
+}
+
+export function savePrompt(promptId: string, content: string): Promise<{ status: string; id: string; content: string }> {
+  return putJson<{ status: string; id: string; content: string }>(`/api/prompts/${encodeURIComponent(promptId)}`, {
+    content
+  });
+}
+
+export function resetPrompt(promptId: string): Promise<{ status: string; id: string; content: string }> {
+  return postJson<{ status: string; id: string; content: string }>(`/api/prompts/${encodeURIComponent(promptId)}/reset`);
 }

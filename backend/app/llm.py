@@ -129,6 +129,44 @@ def list_models(settings: LlmSettings | None = None) -> dict[str, Any]:
     return _request_json(current, "GET", "/models")
 
 
+def chat(
+    *,
+    system: str,
+    user: str,
+    temperature: float = 0.7,
+    max_tokens: int = 512,
+) -> dict[str, Any]:
+    """
+    Simple chat completion that returns plain text content.
+    Returns: {"content": str, "usage": dict}
+    """
+    settings = get_settings()
+    if settings.provider == "ollama":
+        response = _ollama_chat_completion(
+            settings=settings,
+            system=system,
+            user=user,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        content = _ollama_message_text(response)
+    else:
+        # OpenAI-compatible (LM Studio, API)
+        response = _openai_chat_completion(
+            settings=settings,
+            schema_name="",
+            schema={},
+            system=system,
+            user=user,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            structured=False,
+        )
+        content = _openai_message_text_plain(response)
+    usage = response.get("usage", {})
+    return {"content": content, "usage": usage}
+
+
 def chat_json(
     *,
     system: str,
@@ -191,7 +229,7 @@ def chat_json_schema(
             )
             content = _openai_message_text(response)
 
-    parsed = _parse_json_object(content)
+    parsed = _parse_json_object(content, schema_name=schema_name)
     return {
         "model": response.get("model", settings.model),
         "content": content,
@@ -208,13 +246,62 @@ def _supports_structured_output(settings: LlmSettings) -> bool:
 
 def _openai_message_text(response: dict[str, Any]) -> str:
     message = response["choices"][0]["message"]
-    return message.get("content") or ""
+    content = _content_to_text(message.get("content"))
+    if content:
+        return content
+    for key in ("text", "reasoning_content", "reasoning", "thinking"):
+        fallback = _content_to_text(message.get(key))
+        if fallback and _looks_like_contract_json(fallback):
+            return fallback
+    return ""
+
+
+def _openai_message_text_plain(response: dict[str, Any]) -> str:
+    message = response["choices"][0]["message"]
+    for key in ("content", "text", "reasoning_content", "reasoning", "thinking"):
+        content = _content_to_text(message.get(key))
+        if content:
+            return content
+    choice_text = _content_to_text(response["choices"][0].get("text"))
+    if choice_text:
+        return choice_text
+    return ""
 
 
 def _ollama_message_text(response: dict[str, Any]) -> str:
     message = response.get("message", {})
-    content = message.get("content") or response.get("response") or ""
-    return content
+    return _content_to_text(message.get("content")) or _content_to_text(response.get("response"))
+
+
+def _content_to_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(part for part in parts if part).strip()
+    return str(value)
+
+
+def _looks_like_contract_json(text: str) -> bool:
+    return "{" in text and (
+        '"speech"' in text
+        or "'speech'" in text
+        or '"success"' in text
+        or "'success'" in text
+        or '"deltas"' in text
+        or "'deltas'" in text
+        or '"opening"' in text
+        or "'opening'" in text
+    )
 
 
 def _openai_chat_completion(
@@ -236,10 +323,9 @@ def _openai_chat_completion(
         ],
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "reasoning_effort": "low",
-        "enable_thinking": False,
-        "chat_template_kwargs": {"enable_thinking": False},
     }
+    # Note: Removed reasoning_effort, enable_thinking, and chat_template_kwargs
+    # as they were causing the model to generate reasoning tokens but empty content
     if structured:
         payload["response_format"] = {
             "type": "json_schema",
@@ -301,19 +387,32 @@ def _request_json(
         raise RuntimeError(f"{settings.provider} request failed: {exc}") from exc
 
 
-def _parse_json_object(content: str) -> dict[str, Any]:
+def _parse_json_object(content: str, schema_name: str = "") -> dict[str, Any]:
     cleaned = content.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.removeprefix("```json").removeprefix("```").strip()
         cleaned = cleaned.removesuffix("```").strip()
+    candidates = _json_object_candidates(cleaned)
+    if candidates:
+        scored = sorted(
+            candidates,
+            key=lambda item: _candidate_score(item, schema_name),
+            reverse=True,
+        )
+        for candidate in scored:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
     start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start >= 0 and end >= start:
-        cleaned = cleaned[start : end + 1]
+    if start >= 0:
+        cleaned = cleaned[start:]
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        partial = _parse_partial_action(cleaned)
+        partial = _parse_partial_action(cleaned) if schema_name == "agentopia_action" else None
         if partial is not None:
             return partial
         raise ValueError(f"Model did not return valid JSON: {content}") from exc
@@ -323,14 +422,60 @@ def _parse_json_object(content: str) -> dict[str, Any]:
 
 
 def _parse_partial_action(content: str) -> dict[str, Any] | None:
-    if '"speech"' not in content and "'speech'" not in content:
-        return None
-    speech = _extract_string_field(content, "speech")
+    speech = _extract_string_field(content, "speech") or _extract_unclosed_string_field(content, "speech")
+    if not speech:
+        speech = _first_natural_sentence(content)
     if not speech:
         return None
     inner = _extract_string_field(content, "inner") or ""
     to = _extract_string_field(content, "to")
-    return {"speech": speech, "inner": inner, "action": None, "to": to}
+    topic = _extract_string_field(content, "topic") or ""
+    return {"speech": speech, "inner": inner, "action": None, "to": to, "topic": topic}
+
+
+def _json_object_candidates(content: str) -> list[str]:
+    candidates: list[str] = []
+    depth = 0
+    start: int | None = None
+    in_string = False
+    escape = False
+    quote = ""
+    for index, char in enumerate(content):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote:
+                in_string = False
+            continue
+        if char in {'"', "'"}:
+            in_string = True
+            quote = char
+            continue
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0 and start is not None:
+                candidates.append(content[start : index + 1])
+                start = None
+    return candidates
+
+
+def _candidate_score(candidate: str, schema_name: str) -> int:
+    score = len(candidate)
+    if schema_name == "agentopia_action":
+        for field in ('"speech"', '"inner"', '"action"', '"to"', '"topic"'):
+            if field in candidate:
+                score += 1000
+    elif schema_name == "agentopia_verdict":
+        for field in ('"success"', '"narration"', '"deltas"'):
+            if field in candidate:
+                score += 1000
+    return score
 
 
 def _extract_string_field(content: str, field: str) -> str | None:
@@ -346,3 +491,42 @@ def _extract_string_field(content: str, field: str) -> str | None:
             except json.JSONDecodeError:
                 return match.group(1)
     return None
+
+
+def _extract_unclosed_string_field(content: str, field: str) -> str | None:
+    patterns = [
+        rf'"{field}"\s*:\s*"((?:[^"\\]|\\.)*)$',
+        rf"'{field}'\s*:\s*'((?:[^'\\]|\\.)*)$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, content, flags=re.S)
+        if not match:
+            continue
+        value = match.group(1)
+        for marker in ('","inner"', '","action"', '","to"', '","topic"', "\n"):
+            value = value.split(marker, 1)[0]
+        return _decode_jsonish_string(value)
+    return None
+
+
+def _decode_jsonish_string(value: str) -> str:
+    try:
+        return json.loads(f'"{value}"')
+    except json.JSONDecodeError:
+        return value
+
+
+def _first_natural_sentence(content: str) -> str | None:
+    text = re.sub(r"<[^>]+>", " ", content)
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"[{}\[\]\"]", " ", text)
+    text = " ".join(text.split())
+    if not text:
+        return None
+    for prefix in ("speech:", "台词：", "台词:", "回复：", "回复:"):
+        if text.startswith(prefix):
+            text = text[len(prefix) :].strip()
+    matches = re.findall(r"[\u4e00-\u9fff][^。！？!?]{1,120}[。！？!?]?", text)
+    if not matches:
+        return None
+    return matches[0].strip(" ，,;；")

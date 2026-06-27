@@ -12,17 +12,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **事件驱动**: 基于 tick 的时间系统,支持 scheduled/weighted/emergent 三层事件
 - **长跑稳定**: 通过记忆分级、周期性摘要、人格漂移限制等机制保证长期运行不崩坏
 
+## 快速开始
+
+### 开发命令
+
+**后端开发**:
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate      # Windows
+# source .venv/bin/activate  # Linux/Mac
+pip install -r requirements.txt
+python run.py               # 启动 FastAPI 服务器 (http://localhost:8000)
+```
+
+**前端开发**:
+```bash
+cd frontend
+npm install
+npm run dev                 # 启动开发服务器 (http://localhost:5173)
+npm run build               # 构建生产版本
+```
+
+### 环境变量配置
+
+在 `backend/` 目录下可创建 `.env` 文件:
+- `AGENTOPIA_LLM_PROVIDER`: LLM 提供商(默认 `lmstudio`)
+- `LMSTUDIO_BASE_URL`: LM Studio API 地址(默认 `http://127.0.0.1:1234/v1`)
+- `LMSTUDIO_MODEL`: 使用的模型名称(默认 `qwen-agentworld-35b-a3b`)
+
+### API 端点
+
+后端运行后访问:
+- `http://localhost:8000/docs` - Swagger UI 文档
+- `http://localhost:8000/redoc` - ReDoc 文档
+
 ## 核心架构
 
-### 1. 三层设计文档
+### 1. 四层设计文档
 
-项目包含三个核心设计文档,它们之间紧密关联:
+项目包含四个核心设计文档,它们之间紧密关联:
 
 - **`docs/01_数据库设计.md`**: 定义所有数据表结构、字段白名单、时间模型
 - **`docs/02_引擎程序设计.md`**: 定义 Python 引擎模块划分、主循环、调度逻辑
 - **`docs/03_提示词与模型交互设计.md`**: 定义三种 LLM 角色的 Prompt 契约和 JSON schema
+- **`docs/04_上下文无关游戏引擎设计.md`**: 定义"固定系统提示 + 当前数据库切片 + 本拍任务"的架构原则
 
-**工作时必读**: 修改任何设计时需检查三份文档的一致性。
+**工作时必读**: 修改任何设计时需检查四份文档的一致性。
 
 ### 2. 数据流与真相源原则
 
@@ -206,3 +242,50 @@ LLM 产出的 delta 只允许修改以下字段(见 `docs/01_数据库设计.md`
 ```
 
 角色与世界的初始生成建议用云端强模型离线完成,运行期只用本地 30B。
+
+## 当前实现状态
+
+### 已实现的核心模块
+
+**后端 (backend/app/)**:
+- `db.py`: 数据库访问层,包含动态属性/特质系统
+- `llm.py`: LLM 客户端(支持 LM Studio),JSON schema 约束
+- `engine.py`: 角色行动引擎核心逻辑
+- `judge.py`: 裁定层实现
+- `executor.py`: Delta 应用和白名单校验
+- `filtering.py`: 响应过滤(实体检查、文本清洗)
+- `scheduler.py`: 场景调度和对话状态管理
+- `eventsys.py`: 事件系统基础
+- `prompts.py`: Prompt 模板构建
+- `main.py`: FastAPI REST API
+
+**前端 (frontend/src/)**:
+- React + TypeScript + Vite 技术栈
+- 观察窗 UI 组件
+
+### 数据库架构特点
+
+当前实现采用**动态属性系统**,而非完全固定表结构:
+- `attribute_defs`: 定义可用的属性类型(mood, energy, money 等)
+- `char_attributes`: 存储角色的实际属性值
+- `trait_defs`: 定义可用的人格特质
+- `char_traits`: 存储角色的人格特质分数
+
+这种设计提供更高灵活性,可通过 API 动态添加新属性/特质,无需修改表结构。
+
+### 待完善功能
+
+以下模块在设计文档中规划但尚未完全实现:
+- `memory.py`: 记忆管理(分级、压缩、淘汰)
+- `growth.py`: 成长系统(技能 xp、章末人格漂移)
+- `clock.py`: 完整的 tick/day/chapter 时间推进
+- 完整的三层事件系统(scheduled/weighted/emergent)
+- 章末结算机制
+- 世界层 LLM 角色(World model)
+
+### 开发时注意
+
+1. **数据库初始化**: 首次运行时数据库会自动创建在 `backend/data/agentopia.sqlite3`,但需要通过 API 或手动添加 attribute_defs/trait_defs/characters
+2. **LLM 连接**: 确保 LM Studio 或兼容的 OpenAI API 服务正在运行
+3. **动态 schema**: 属性和特质可通过 API 动态管理,参考 `http://localhost:8000/docs` 了解可用接口
+4. **数据目录**: `backend/data/` 已在 .gitignore 中,不会提交到仓库

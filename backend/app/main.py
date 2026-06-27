@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -11,6 +12,7 @@ from .db import (
     dumps,
     loads,
     reset_character_state,
+    reset_world,
     seed_character_defaults,
     seed_demo,
     set_character_attribute,
@@ -22,7 +24,9 @@ from .engine import summarize_applied
 from .executor import Delta, append_verdict_log, apply_deltas
 from .filtering import sanitize_display_text
 from .llm import LlmSettings, get_settings, list_models, public_settings, save_settings
+from .prompt_store import ensure_prompt_files, get_prompt, list_prompts, reset_prompt, save_prompt
 from .scheduler import current_or_open_scene, scene_prompt_slice
+from .threads import active_thread_slice
 
 
 app = FastAPI(title="Agentopia API", version="0.1.0")
@@ -85,8 +89,8 @@ class SceneLogCreate(BaseModel):
 
 
 class LlmActPayload(BaseModel):
-    char_id: str = "char_lin"
-    situation: str = "旧酒馆刚开门，雨意压在街角。"
+    char_id: str = "char_ghost"
+    situation: str = "来生酒吧刚进入夜间高峰，又是一个寻找机会的时段。"
 
 
 class EngineStepPayload(BaseModel):
@@ -94,7 +98,7 @@ class EngineStepPayload(BaseModel):
 
 
 class OpeningPayload(BaseModel):
-    content: str = "旧酒馆刚刚开门，雨意压在街角。"
+    content: str | None = None
 
 
 class DeltaPayload(BaseModel):
@@ -120,8 +124,13 @@ class LlmSettingsPayload(BaseModel):
     api_key: str = ""
 
 
+class PromptPayload(BaseModel):
+    content: str
+
+
 @app.on_event("startup")
 def startup() -> None:
+    ensure_prompt_files()
     seed_demo()
 
 
@@ -140,6 +149,13 @@ def dev_seed() -> dict[str, str]:
 def dev_reset_characters() -> dict[str, str]:
     reset_character_state()
     return {"status": "characters_reset"}
+
+
+@app.post("/api/dev/reset-world")
+def dev_reset_world() -> dict[str, str]:
+    """完全重置世界：删除所有旧角色和日志，重新seed新的赛博朋克角色"""
+    reset_world()
+    return {"status": "world_reset"}
 
 
 @app.get("/api/llm/status")
@@ -193,6 +209,42 @@ def test_llm_connection() -> dict[str, Any]:
     return {"status": "ok", "settings": public_settings(settings), "model_count": len(models.get("data", []))}
 
 
+@app.get("/api/prompts")
+def api_list_prompts() -> dict[str, Any]:
+    return {"prompts": list_prompts()}
+
+
+@app.get("/api/prompts/{prompt_id}")
+def api_get_prompt(prompt_id: str) -> dict[str, Any]:
+    try:
+        prompt = next((item for item in list_prompts() if item["id"] == prompt_id), None)
+        if prompt is None:
+            raise KeyError(prompt_id)
+        return {**prompt, "content": get_prompt(prompt_id)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Prompt not found: {prompt_id}") from exc
+
+
+@app.put("/api/prompts/{prompt_id}")
+def api_save_prompt(prompt_id: str, payload: PromptPayload) -> dict[str, Any]:
+    try:
+        content = save_prompt(prompt_id, payload.content)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Prompt not found: {prompt_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "saved", "id": prompt_id, "content": content}
+
+
+@app.post("/api/prompts/{prompt_id}/reset")
+def api_reset_prompt(prompt_id: str) -> dict[str, Any]:
+    try:
+        content = reset_prompt(prompt_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Prompt not found: {prompt_id}") from exc
+    return {"status": "reset", "id": prompt_id, "content": content}
+
+
 @app.get("/api/world")
 def get_world() -> dict[str, Any]:
     with connect() as conn:
@@ -210,6 +262,9 @@ def get_world() -> dict[str, Any]:
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="World state not initialized")
+    current_scene = scene_to_public(scene_row) if scene_row is not None else None
+    with connect() as conn:
+        active_threads = active_thread_slice(conn, current_scene, limit=5) if current_scene is not None else []
     return {
         "sim_tick": row["sim_tick"],
         "day": row["day"],
@@ -218,10 +273,10 @@ def get_world() -> dict[str, Any]:
         "weather": row["weather"],
         "tension": row["tension"],
         "economy_index": row["economy_index"],
-        "active_threads": loads(row["active_threads"], []),
+        "active_threads": active_threads or loads(row["active_threads"], []),
         "worldview": row["worldview"],
         "log_count": log_count,
-        "current_scene": scene_to_public(scene_row) if scene_row is not None else None,
+        "current_scene": current_scene,
     }
 
 
@@ -556,7 +611,7 @@ def sanitize_log_content(log_type: str, content: str, data: dict[str, Any] | Non
             return summarize_applied(applied)
         return sanitize_display_text(content, "裁定完成，本拍无数值变化。")
     if log_type == "speech":
-        return sanitize_display_text(content, "沉默了一瞬。")
+        return sanitize_display_text(content, "")
     return sanitize_display_text(content, "世界安静了一瞬。")
 
 
@@ -580,6 +635,8 @@ def append_scene_log(payload: SceneLogCreate) -> dict[str, Any]:
 def clear_scene_log() -> dict[str, Any]:
     with connect() as conn:
         conn.execute("DELETE FROM scene_log")
+        conn.execute("DELETE FROM story_beats")
+        conn.execute("DELETE FROM story_threads")
         conn.execute("DELETE FROM event_instances")
         conn.execute("DELETE FROM scenes")
         conn.execute("UPDATE event_defs SET last_fired_tick = -999999")
@@ -620,17 +677,192 @@ def engine_step(payload: EngineStepPayload) -> dict[str, Any]:
 @app.post("/api/engine/opening")
 def engine_opening(payload: OpeningPayload) -> dict[str, Any]:
     with connect() as conn:
-        world = conn.execute("SELECT sim_tick FROM world_state WHERE id = 1").fetchone()
-        tick = world["sim_tick"] if world else 0
+        world = conn.execute("SELECT worldview FROM world_state WHERE id = 1").fetchone()
+        worldview = world["worldview"] if world else "夜之城，来生酒吧。"
+        tick_row = conn.execute("SELECT sim_tick FROM world_state WHERE id = 1").fetchone()
+        tick = tick_row["sim_tick"] if tick_row else 0
         scene = current_or_open_scene(conn)
+
+        location = conn.execute("SELECT * FROM locations WHERE id = ?", (scene["location_id"],)).fetchone()
+        if location is None:
+            raise HTTPException(status_code=500, detail=f"当前场景地点不存在: {scene['location_id']}")
+        location_desc = location["description"]
+        location_name = location["name"]
+        location_state = loads(location["state"], {})
+        recent_rows = conn.execute(
+            """
+            SELECT content FROM scene_log
+            WHERE type = 'narration'
+            ORDER BY id DESC
+            LIMIT 6
+            """
+        ).fetchall()
+        recent_openings = [row["content"] for row in recent_rows]
+
+        system_prompt = get_prompt("opening_system")
+
+        user_prompt = f"""世界观：{worldview}
+地点：{location_name}
+地点事实：{location_desc}
+场景数值：{dumps(location_state)}
+最近已用开场：{dumps(recent_openings)}
+
+请生成一句全新的开场："""
+
+        try:
+            from .llm import chat_json_schema
+            import random
+
+            opening_schema = {
+                "type": "object",
+                "properties": {"opening": {"type": "string"}},
+                "required": ["opening"],
+                "additionalProperties": False,
+            }
+            source_texts = [worldview, location_desc, *recent_openings]
+            attempts = [
+                user_prompt,
+                f"""上一轮没有按契约输出。请只返回 JSON，不要分析。
+
+地点：{location_name}
+地点事实：{location_desc}
+场景数值：{dumps(location_state)}
+最近已用开场：{dumps(recent_openings)}
+
+返回格式：{{"opening":"一句20到40个汉字的环境开场"}}""",
+            ]
+            errors: list[str] = []
+            content = ""
+            for index, prompt in enumerate(attempts):
+                try:
+                    temp = 0.82 + random.uniform(-0.08, 0.12) if index == 0 else 0.65
+                    result = chat_json_schema(
+                        schema_name="agentopia_opening",
+                        schema=opening_schema,
+                        system=system_prompt,
+                        user=prompt,
+                        temperature=temp,
+                        max_tokens=120 if index == 0 else 80,
+                    )
+                    parsed = result.get("parsed", {})
+                    raw_content = str(parsed.get("opening") or result.get("content", ""))
+                    content = normalize_opening_content(raw_content, source_texts=source_texts)
+                    break
+                except Exception as exc:
+                    errors.append(str(exc))
+            if not content:
+                raise ValueError("; ".join(errors[-2:]) or "LLM 未返回合格开场")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"首句生成失败: {exc}") from exc
+
         cursor = conn.execute(
             """
             INSERT INTO scene_log (scene_id, tick, actor_id, type, content, data, visibility)
             VALUES (?, ?, 'WORLD', 'narration', ?, '{}', 'all')
             """,
-            (scene["id"], tick, payload.content),
+            (scene["id"], tick, content),
         )
-    return {"status": "ok", "log_id": cursor.lastrowid}
+    return {"status": "ok", "log_id": cursor.lastrowid, "content": content}
+
+
+def normalize_opening_content(raw_content: str, source_texts: list[str] | None = None) -> str:
+    content = raw_content.strip().strip('"\'`')
+    if not content:
+        raise ValueError("LLM 未返回任何开场内容")
+    if content.startswith("```") and content.endswith("```"):
+        lines = content.splitlines()
+        content = "\n".join(lines[1:-1]).strip()
+    prefixes = [
+        "开场白：",
+        "开场白:",
+        "narration:",
+        "Narration:",
+        "NARRATION:",
+        "输出：",
+        "输出:",
+        "Output:",
+        "output:",
+        "→ 输出：",
+        "→ 输出:",
+    ]
+    for prefix in prefixes:
+        if content.startswith(prefix):
+            content = content[len(prefix) :].strip()
+    content = re.sub(r"<[^>]+>", " ", content)
+    content = " ".join(content.split())
+    if _is_valid_opening_sentence(content, source_texts=source_texts):
+        cleaned = sanitize_display_text(content, "")
+        if cleaned:
+            return cleaned
+    candidates = re.findall(r"[\u4e00-\u9fff][\u4e00-\u9fff0-9，、；：：“”‘’（）《》\s]{8,80}[。！？]?", content)
+    for candidate in candidates:
+        candidate = candidate.strip(" ，,;；")
+        if not _is_valid_opening_sentence(candidate, source_texts=source_texts):
+            continue
+        cleaned = sanitize_display_text(candidate, "")
+        if 10 <= len(cleaned) <= 90:
+            return cleaned
+    raise ValueError(f"LLM 开场内容不可用: {raw_content[:200]}")
+
+
+def _is_valid_opening_sentence(text: str, source_texts: list[str] | None = None) -> bool:
+    if not 10 <= len(text) <= 90:
+        return False
+    cjk_count = sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
+    ascii_letters = sum(1 for char in text if char.isascii() and char.isalpha())
+    if cjk_count < 10:
+        return False
+    if ascii_letters:
+        return False
+    blocked_markers = (
+        "开场白",
+        "世界观",
+        "场景描述",
+        "地点事实",
+        "场景数值",
+        "最近已用",
+        "请直接",
+        "请生成",
+        "生成一句",
+        "全新的开场",
+        "一句中文",
+        "输出",
+        "要求",
+        "不能",
+        "需要",
+        "不要",
+        "没有具体角色",
+        "角色名称",
+    )
+    if any(marker in text for marker in blocked_markers):
+        return False
+    if _copies_source_text(text, source_texts or []):
+        return False
+    return True
+
+
+def _copies_source_text(text: str, source_texts: list[str]) -> bool:
+    compact = _compact_cjk(text)
+    if len(compact) < 10:
+        return False
+    for source in source_texts:
+        source_compact = _compact_cjk(source)
+        if not source_compact:
+            continue
+        if compact in source_compact:
+            return True
+        window = 8
+        chunks = {compact[index : index + window] for index in range(0, max(1, len(compact) - window + 1), window)}
+        hits = sum(1 for chunk in chunks if len(chunk) == window and chunk in source_compact)
+        if hits >= 2:
+            return True
+    return False
+
+
+def _compact_cjk(text: str) -> str:
+    return "".join(char for char in text if "\u4e00" <= char <= "\u9fff")
 
 
 @app.post("/api/dev/llm-act")

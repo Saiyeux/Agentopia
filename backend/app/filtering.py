@@ -23,12 +23,14 @@ def filter_action(action: dict[str, Any], present_ids: set[str]) -> tuple[dict[s
     """Clamp model ACTION JSON to the current scene's known entities."""
     warnings: list[str] = []
     filtered = {
-        "speech": sanitize_display_text(str(action.get("speech") or ""), "沉默了一瞬。"),
+        "speech": sanitize_display_text(str(action.get("speech") or ""), ""),
         "inner": sanitize_short_text(str(action.get("inner") or "")),
         "action": action.get("action"),
         "to": action.get("to"),
         "topic": sanitize_short_text(str(action.get("topic") or "")),
     }
+    if not filtered["speech"]:
+        raise ValueError("角色模型没有返回可用 speech")
 
     if filtered["to"] not in present_ids:
         if filtered["to"] is not None:

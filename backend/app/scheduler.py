@@ -9,7 +9,7 @@ from .db import dumps, loads, set_character_attribute, value_from_storage
 DEFAULT_SCENE_BUDGET = 24
 
 
-def current_or_open_scene(conn: sqlite3.Connection, location_id: str = "hall") -> dict[str, Any]:
+def current_or_open_scene(conn: sqlite3.Connection, location_id: str = "main_floor") -> dict[str, Any]:
     row = conn.execute(
         """
         SELECT *
@@ -24,7 +24,7 @@ def current_or_open_scene(conn: sqlite3.Connection, location_id: str = "hall") -
     return open_scene(conn, location_id)
 
 
-def open_scene(conn: sqlite3.Connection, location_id: str = "hall") -> dict[str, Any]:
+def open_scene(conn: sqlite3.Connection, location_id: str = "main_floor") -> dict[str, Any]:
     location = conn.execute("SELECT * FROM locations WHERE id = ?", (location_id,)).fetchone()
     if location is None:
         raise ValueError(f"Location not found: {location_id}")

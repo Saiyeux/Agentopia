@@ -85,8 +85,8 @@ def adjudicate_action(
             schema=verdict_schema(present_ids),
             system=system,
             user=user,
-            temperature=0.2,
-            max_tokens=512,
+            temperature=0.4,
+            max_tokens=384,
         )
     except Exception as exc:
         return {

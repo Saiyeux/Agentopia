@@ -18,6 +18,7 @@ from .scheduler import (
     record_scene_turn,
     scene_prompt_slice,
 )
+from .threads import active_thread_slice, record_thread_turn, thread_situation
 
 
 def list_present_character_ids(conn: sqlite3.Connection) -> list[str]:
@@ -46,6 +47,7 @@ def run_character_action(
     present_characters = _present_characters(conn, present)
     actor_relationships = _actor_relationships(conn, char_id, present)
     recent = _recent_log(conn, int(scene["id"]) if scene is not None else None)
+    active_threads = active_thread_slice(conn, scene, actor_id=char_id)
     system, user = build_character_prompt(
         actor=dict(character),
         actor_attributes=attrs,
@@ -55,17 +57,12 @@ def run_character_action(
         conversation_state=conversation_state,
         present_characters=present_characters,
         recent_scene_log=recent,
+        active_story_threads=active_threads,
         situation=situation,
     )
-    warnings: list[str] = []
-    try:
-        result = chat_json(system=system, user=user, temperature=0.7, max_tokens=1536)
-        action, warnings = filter_action(result["parsed"], set(present))
-        usage = result["usage"]
-    except Exception as exc:
-        action = fallback_action(char_id, character["name"], character["summary"])
-        usage = {}
-        warnings = [f"character llm fallback: {exc}"]
+    result = chat_json(system=system, user=user, temperature=0.85, max_tokens=1024)
+    action, warnings = filter_action(result["parsed"], set(present))
+    usage = result["usage"]
     log_id = append_action_log(
         conn,
         char_id,
@@ -75,6 +72,15 @@ def run_character_action(
         warnings,
         int(scene["id"]) if scene is not None else None,
     )
+    thread_update = None
+    if scene is not None:
+        thread_update = record_thread_turn(
+            conn,
+            scene=scene,
+            actor_id=char_id,
+            action=action,
+            log_id=log_id,
+        )
     if scene is not None:
         record_scene_turn(
             conn,
@@ -90,39 +96,19 @@ def run_character_action(
         "action": action,
         "warnings": warnings,
         "usage": usage,
+        "thread_update": thread_update,
     }
-
-
-def fallback_action(char_id: str, char_name: str, summary: str) -> dict[str, Any]:
-    speech_by_id = {
-        "char_lin": "我先看看有没有能接的活。",
-        "char_maya": "都别干坐着，想吃喝就开口。",
-        "char_ren": "我刚听来一条消息，等价钱合适再说。",
-        "char_su": "雨夜容易受寒，热茶比烈酒稳妥些。",
-        "char_hao": "谁要是见过我那袋货，最好现在就说。",
-    }
-    speech = speech_by_id.get(char_id) or f"{char_name}打量着四周，暂时没有多说。"
-    return {
-        "speech": speech,
-        "inner": summary[:15],
-        "action": None,
-        "to": None,
-        "topic": "",
-    }
-
 
 def step_once(conn: sqlite3.Connection, situation: str | None = None) -> dict[str, Any]:
     tick = advance_tick(conn)
     scene = current_or_open_scene(conn)
     events = scan_and_fire(conn, scene)
     actor_id = pick_next_actor(conn, scene)
-    event_situation = _event_situation(events)
+    active_threads = active_thread_slice(conn, scene, actor_id=actor_id, limit=1)
     result = run_character_action(
         conn,
         actor_id,
-        situation
-        or event_situation
-        or "旧酒馆里众人各怀心事，雨声贴着窗缝。轮到你自然地接一句或做一个动作。",
+        situation or _turn_situation(events, active_threads) or "来生酒吧进入夜间高峰，每个人都在等待机会或者躲避麻烦。是时候采取行动了。",
         scene,
     )
     verdict = adjudicate_action(conn, actor_id=actor_id, action=result["action"], scene=scene)
@@ -150,6 +136,25 @@ def _event_situation(events: list[dict[str, Any]]) -> str | None:
         return None
     latest = events[-1]
     return f"刚发生事件：{latest['narration']} 轮到你自然回应一句或做一个动作。"
+
+
+def _turn_situation(events: list[dict[str, Any]], active_threads: list[dict[str, Any]]) -> str | None:
+    thread_text = thread_situation(active_threads)
+    if thread_text:
+        ambient = _ambient_event_situation(events)
+        if ambient:
+            return f"{thread_text} 同时发生了环境小事：{ambient} 可以轻轻带过，但不要打断当前剧情线。"
+        return thread_text
+    return _event_situation(events)
+
+
+def _ambient_event_situation(events: list[dict[str, Any]]) -> str | None:
+    if not events:
+        return None
+    latest = events[-1]
+    if latest.get("thread_id") is not None:
+        return None
+    return str(latest.get("narration") or "")
 
 
 def summarize_applied(applied: list[dict[str, Any]], conn: sqlite3.Connection | None = None) -> str:
@@ -200,7 +205,9 @@ def append_action_log(
     scene_id: int | None = None,
 ) -> int:
     speech = str(action.get("speech") or "")
-    content = sanitize_display_text(speech, f"{char_name}沉默了一瞬。")
+    content = sanitize_display_text(speech, "")
+    if not content:
+        raise ValueError(f"角色模型没有返回可用台词: {char_name}")
     world = conn.execute("SELECT sim_tick FROM world_state WHERE id = 1").fetchone()
     tick = world["sim_tick"] if world else 0
     cursor = conn.execute(

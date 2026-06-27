@@ -1,4 +1,4 @@
-import { Activity, Database, KeyRound, Play, RefreshCw, Save, ScrollText, ServerCog, Sparkles, Trash2, Users } from "lucide-react";
+import { Activity, Database, FileText, KeyRound, Play, RefreshCw, Save, ScrollText, ServerCog, Sparkles, Trash2, Users } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -7,23 +7,30 @@ import {
   LlmModel,
   LlmProvider,
   LlmSettings,
+  PromptDocument,
+  PromptMeta,
   SceneLog,
   WorldState,
   fetchLlmModels,
   fetchLlmSettings,
+  fetchPrompt,
+  fetchPrompts,
   fetchCharacters,
   fetchSceneLog,
   fetchWorld,
   runOneStep,
   clearSceneLog,
   resetCharacters,
+  resetWorld,
+  resetPrompt,
+  savePrompt,
   startOpening,
   saveLlmSettings,
   testLlmConnection
 } from "./api";
 import "./styles.css";
 
-type TabKey = "world" | "characters" | "logs" | "api";
+type TabKey = "world" | "characters" | "logs" | "prompts" | "api";
 
 type LoadState = {
   world: WorldState | null;
@@ -63,14 +70,14 @@ function App() {
   const actorNames = Object.fromEntries(state.characters.map((character) => [character.id, character.name]));
 
   async function load() {
-    setState((current) => ({ ...current, loading: true, error: null }));
+    setState((current) => ({ ...current, loading: true }));
     try {
       const [world, characters, logs] = await Promise.all([
         fetchWorld(),
         fetchCharacters(),
         fetchSceneLog()
       ]);
-      setState((current) => ({ ...current, world, characters, logs, error: null, loading: false }));
+      setState((current) => ({ ...current, world, characters, logs, loading: false }));
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -78,6 +85,10 @@ function App() {
         loading: false
       }));
     }
+  }
+
+  function clearError() {
+    setState((current) => ({ ...current, error: null }));
   }
 
   async function step(options: { switchToLogs?: boolean } = {}) {
@@ -150,6 +161,25 @@ function App() {
     setState((current) => ({ ...current, running: false }));
   }
 
+  async function resetWholeWorld() {
+    setAutoRunning(false);
+    if (!window.confirm("确定要完全重置世界吗？这将删除所有旧角色和日志，重新加载赛博朋克角色。")) {
+      return;
+    }
+    setState((current) => ({ ...current, running: true, error: null }));
+    try {
+      await resetWorld();
+      await load();
+      setActiveTab("characters");
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "重置世界失败"
+      }));
+    }
+    setState((current) => ({ ...current, running: false }));
+  }
+
   function setAutoRunning(next: boolean) {
     autoRunningRef.current = next;
     setState((current) => ({ ...current, autoRunning: next }));
@@ -192,7 +222,30 @@ function App() {
         </button>
       </header>
 
-      {state.error ? <div className="error">后端未连接：{state.error}</div> : null}
+      {state.error ? (
+        <div className="error">
+          <div style={{ flex: 1 }}>
+            <strong>错误：</strong>
+            <pre style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", fontSize: "12px", lineHeight: 1.4 }}>
+              {state.error}
+            </pre>
+          </div>
+          <button
+            onClick={clearError}
+            style={{
+              background: "transparent",
+              border: "1px solid #e4b49e",
+              borderRadius: "4px",
+              color: "#7b2d15",
+              cursor: "pointer",
+              padding: "4px 12px",
+              fontSize: "12px"
+            }}
+          >
+            关闭
+          </button>
+        </div>
+      ) : null}
 
       <nav className="tabs" aria-label="主视图">
         <TabButton
@@ -214,6 +267,12 @@ function App() {
           onClick={() => setActiveTab("logs")}
         />
         <TabButton
+          active={activeTab === "prompts"}
+          icon={<FileText size={17} />}
+          label="提示词"
+          onClick={() => setActiveTab("prompts")}
+        />
+        <TabButton
           active={activeTab === "api"}
           icon={<ServerCog size={17} />}
           label="API"
@@ -226,7 +285,12 @@ function App() {
           <WorldPanel world={state.world} loading={state.loading} />
         ) : null}
         {activeTab === "characters" ? (
-          <CharactersPanel characters={state.characters} running={state.running} onReset={() => void resetCharacterState()} />
+          <CharactersPanel
+            characters={state.characters}
+            running={state.running}
+            onReset={() => void resetCharacterState()}
+            onResetWorld={() => void resetWholeWorld()}
+          />
         ) : null}
         {activeTab === "logs" ? (
           <LogPanel
@@ -240,6 +304,7 @@ function App() {
             onToggleAuto={() => setAutoRunning(!state.autoRunning)}
           />
         ) : null}
+        {activeTab === "prompts" ? <PromptPanel /> : null}
         {activeTab === "api" ? <ApiPanel /> : null}
       </section>
     </main>
@@ -317,11 +382,13 @@ function WorldPanel({
 function CharactersPanel({
   characters,
   running,
-  onReset
+  onReset,
+  onResetWorld
 }: {
   characters: Character[];
   running: boolean;
   onReset: () => void;
+  onResetWorld: () => void;
 }) {
   return (
     <section className="panel characters-panel">
@@ -330,9 +397,14 @@ function CharactersPanel({
           <Users size={18} />
           <h2>角色</h2>
         </div>
-        <button className="mode-button" disabled={running} onClick={onReset} type="button">
-          还原角色
-        </button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button className="mode-button" disabled={running} onClick={onReset} type="button">
+            还原角色
+          </button>
+          <button className="danger-button" disabled={running} onClick={onResetWorld} type="button">
+            完全重置
+          </button>
+        </div>
       </div>
       <div className="character-list">
         {characters.map((character) => (
@@ -447,13 +519,13 @@ function LogPanel({
       </div>
       <div className="log-list">
         {displayLogs.map(({ log, verdict }) => (
-          <article className="log-entry" key={log.id}>
-            <div>
+          <article className={`log-entry log-entry-${log.type}`} key={log.id}>
+            <div className="log-meta">
               <span className="log-type">{log.type}</span>
               <span>tick {log.tick}</span>
               <span>{displayActorName(log.actor_id, actorNames)}</span>
             </div>
-            <p>{log.content}</p>
+            <p className="log-content">{log.content}</p>
             {verdict ? <VerdictResult verdict={verdict} actorNames={actorNames} /> : null}
           </article>
         ))}
@@ -695,6 +767,157 @@ function ApiPanel() {
         <div className="settings-status">
           {message ? <p>{message}</p> : null}
           {error ? <p className="settings-error">{error}</p> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PromptPanel() {
+  const [prompts, setPrompts] = useState<PromptMeta[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const [document, setDocument] = useState<PromptDocument | null>(null);
+  const [content, setContent] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function loadPromptList() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await fetchPrompts();
+      setPrompts(result.prompts);
+      const nextId = activeId || result.prompts[0]?.id || "";
+      if (nextId) {
+        await loadPrompt(nextId);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "读取提示词列表失败");
+    }
+    setBusy(false);
+  }
+
+  async function loadPrompt(promptId: string) {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const next = await fetchPrompt(promptId);
+      setActiveId(next.id);
+      setDocument(next);
+      setContent(next.content);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "读取提示词失败");
+    }
+    setBusy(false);
+  }
+
+  async function saveCurrentPrompt() {
+    if (!document) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await savePrompt(document.id, content);
+      setContent(result.content);
+      setDocument({ ...document, content: result.content });
+      setMessage("已保存，下一次模型调用会读取这份内容。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存提示词失败");
+    }
+    setBusy(false);
+  }
+
+  async function resetCurrentPrompt() {
+    if (!document) {
+      return;
+    }
+    if (!window.confirm(`恢复 ${document.title} 的默认内容？`)) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await resetPrompt(document.id);
+      setContent(result.content);
+      setDocument({ ...document, content: result.content });
+      setMessage("已恢复默认内容。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "恢复默认失败");
+    }
+    setBusy(false);
+  }
+
+  useEffect(() => {
+    void loadPromptList();
+  }, []);
+
+  return (
+    <section className="panel prompt-panel">
+      <div className="panel-title">
+        <div>
+          <FileText size={18} />
+          <h2>提示词与处理链路</h2>
+        </div>
+        <button className="mode-button" disabled={busy} onClick={() => void loadPromptList()} type="button">
+          刷新
+        </button>
+      </div>
+
+      <div className="prompt-layout">
+        <aside className="prompt-list">
+          {prompts.map((item) => (
+            <button
+              className={activeId === item.id ? "prompt-list-item active" : "prompt-list-item"}
+              key={item.id}
+              onClick={() => void loadPrompt(item.id)}
+              type="button"
+            >
+              <strong>{item.title}</strong>
+              <span>{item.filename}</span>
+            </button>
+          ))}
+        </aside>
+
+        <div className="prompt-editor">
+          {document ? (
+            <>
+              <div className="prompt-heading">
+                <div>
+                  <h3>{document.title}</h3>
+                  <p>{document.description}</p>
+                  <small>{document.filename}</small>
+                </div>
+                <div className="settings-actions">
+                  <button className="primary-action" disabled={busy} onClick={() => void saveCurrentPrompt()} type="button">
+                    <Save size={16} />
+                    <span>保存</span>
+                  </button>
+                  <button className="danger-button" disabled={busy} onClick={() => void resetCurrentPrompt()} type="button">
+                    恢复默认
+                  </button>
+                </div>
+              </div>
+
+              <textarea
+                className="prompt-textarea"
+                spellCheck={false}
+                value={content}
+                onChange={(event) => setContent(event.target.value)}
+              />
+
+              <div className="settings-status">
+                {message ? <p>{message}</p> : null}
+                {error ? <p className="settings-error">{error}</p> : null}
+              </div>
+            </>
+          ) : (
+            <p className="muted">{busy ? "正在加载提示词..." : "暂无提示词文件"}</p>
+          )}
         </div>
       </div>
     </section>
