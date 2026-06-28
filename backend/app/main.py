@@ -25,7 +25,7 @@ from .executor import Delta, append_verdict_log, apply_deltas
 from .filtering import sanitize_display_text
 from .llm import LlmSettings, get_settings, list_models, public_settings, save_settings
 from .prompt_store import ensure_prompt_files, get_prompt, list_prompts, reset_prompt, save_prompt
-from .scheduler import current_or_open_scene, scene_prompt_slice
+from .scheduler import current_or_open_scene, list_open_scenes, scene_prompt_slice
 from .threads import active_thread_slice
 
 
@@ -90,7 +90,7 @@ class SceneLogCreate(BaseModel):
 
 class LlmActPayload(BaseModel):
     char_id: str = "char_ghost"
-    situation: str = "来生酒吧刚进入夜间高峰，又是一个寻找机会的时段。"
+    situation: str = ""
 
 
 class EngineStepPayload(BaseModel):
@@ -250,19 +250,10 @@ def get_world() -> dict[str, Any]:
     with connect() as conn:
         row = conn.execute("SELECT * FROM world_state WHERE id = 1").fetchone()
         log_count = conn.execute("SELECT COUNT(*) AS count FROM scene_log").fetchone()["count"]
-        scene_row = conn.execute(
-            """
-            SELECT id, location_id, title, purpose, start_tick, end_tick, participants,
-                   turn_budget, turn_count, status, state
-            FROM scenes
-            WHERE status = 'open'
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
+        open_scenes = [scene_to_public(scene) for scene in list_open_scenes(conn)]
     if row is None:
         raise HTTPException(status_code=404, detail="World state not initialized")
-    current_scene = scene_to_public(scene_row) if scene_row is not None else None
+    current_scene = open_scenes[0] if open_scenes else None
     with connect() as conn:
         active_threads = active_thread_slice(conn, current_scene, limit=5) if current_scene is not None else []
     return {
@@ -277,10 +268,13 @@ def get_world() -> dict[str, Any]:
         "worldview": row["worldview"],
         "log_count": log_count,
         "current_scene": current_scene,
+        "open_scenes": open_scenes,
     }
 
 
 def scene_to_public(row: Any) -> dict[str, Any]:
+    participants = row["participants"]
+    state = row["state"]
     return {
         "id": row["id"],
         "location_id": row["location_id"],
@@ -288,11 +282,11 @@ def scene_to_public(row: Any) -> dict[str, Any]:
         "purpose": row["purpose"],
         "start_tick": row["start_tick"],
         "end_tick": row["end_tick"],
-        "participants": loads(row["participants"], []),
+        "participants": participants if isinstance(participants, list) else loads(participants, []),
         "turn_budget": row["turn_budget"],
         "turn_count": row["turn_count"],
         "status": row["status"],
-        "state": loads(row["state"], {}),
+        "state": state if isinstance(state, dict) else loads(state, {}),
     }
 
 
@@ -606,13 +600,10 @@ def list_scene_log(after_id: int = 0, limit: int = 100) -> list[dict[str, Any]]:
 
 def sanitize_log_content(log_type: str, content: str, data: dict[str, Any] | None = None) -> str:
     if log_type == "verdict":
-        applied = (data or {}).get("applied")
-        if isinstance(applied, list):
-            return summarize_applied(applied)
-        return sanitize_display_text(content, "裁定完成，本拍无数值变化。")
+        return sanitize_display_text(content, "")
     if log_type == "speech":
         return sanitize_display_text(content, "")
-    return sanitize_display_text(content, "世界安静了一瞬。")
+    return sanitize_display_text(content, "")
 
 
 @app.post("/api/scene-log")
@@ -678,7 +669,7 @@ def engine_step(payload: EngineStepPayload) -> dict[str, Any]:
 def engine_opening(payload: OpeningPayload) -> dict[str, Any]:
     with connect() as conn:
         world = conn.execute("SELECT worldview FROM world_state WHERE id = 1").fetchone()
-        worldview = world["worldview"] if world else "夜之城，来生酒吧。"
+        worldview = world["worldview"] if world else ""
         tick_row = conn.execute("SELECT sim_tick FROM world_state WHERE id = 1").fetchone()
         tick = tick_row["sim_tick"] if tick_row else 0
         scene = current_or_open_scene(conn)

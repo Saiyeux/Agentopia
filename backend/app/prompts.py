@@ -19,6 +19,16 @@ def build_character_prompt(
     active_story_threads: list[dict[str, Any]],
     situation: str,
 ) -> tuple[str, str]:
+    last_turn = conversation_state.get("last_turn") if isinstance(conversation_state, dict) else None
+    dialogue_context = {
+        "directed_to_me": bool(last_turn and last_turn.get("recipient_id") == actor["id"]),
+        "overheard": bool(
+            last_turn
+            and last_turn.get("recipient_id") not in (None, actor["id"])
+            and actor["id"] in conversation_state.get("heard_by", [])
+        ),
+        "not_heard": bool(last_turn and actor["id"] not in conversation_state.get("heard_by", [])),
+    }
     payload = {
         "actor": {
             "id": actor["id"],
@@ -31,6 +41,7 @@ def build_character_prompt(
         },
         "scene": scene,
         "conversation_state": conversation_state,
+        "dialogue_context": dialogue_context,
         "active_story_threads": active_story_threads,
         "present_characters": present_characters,
         "recent_scene_log": recent_scene_log[-6:],
@@ -80,3 +91,34 @@ def build_judge_prompt(
 
 def world_system_prompt() -> str:
     return get_prompt("world_system")
+
+
+def build_world_event_prompt(
+    *,
+    world: dict[str, Any],
+    event_def: dict[str, Any],
+    scene: dict[str, Any] | None,
+    scene_slice: dict[str, Any] | None,
+    recent_scene_log: list[dict[str, Any]],
+) -> tuple[str, str]:
+    payload = {
+        "world": world,
+        "event_def": {
+            "id": event_def["id"],
+            "title": event_def["title"],
+            "tier": event_def["tier"],
+            "target_need": event_def.get("target_need"),
+            "guidance": event_def.get("guidance", ""),
+            "effects": event_def.get("effects", []),
+        },
+        "scene": scene_slice,
+        "scene_runtime": scene,
+        "recent_scene_log": recent_scene_log[-8:],
+        "task": {
+            "instruction": "根据 event_def 的意图即时生成一个当前场景可感知的世界事件。不要使用任何预设事件句，不要复述 guidance 原文；同类事件每次要换人物、物件、声音、地点焦点或触发方式。只返回 JSON。",
+            "required_json": {
+                "narration": "一句新的中文事件描述，20到90字",
+            },
+        },
+    }
+    return world_system_prompt(), dumps(payload)

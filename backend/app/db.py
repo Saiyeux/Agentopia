@@ -218,6 +218,7 @@ CREATE TABLE IF NOT EXISTS story_threads (
   stakes TEXT NOT NULL DEFAULT '{}',
   priority INTEGER NOT NULL DEFAULT 50,
   beat_count INTEGER NOT NULL DEFAULT 0,
+  stalled_turns INTEGER NOT NULL DEFAULT 0,
   created_tick INTEGER NOT NULL DEFAULT 0,
   updated_tick INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -320,7 +321,7 @@ DEFAULT_EVENT_DEFS = [
         100,
         None,  # target_need
         "每隔一段时间让酒吧环境发生轻微变化。",
-        "入口识别器短暂重启，几名重装来客核对完室内人数后离开，像是在确认某个目标是否出现。",
+        "",
         [
             {"target": "scene_attribute", "field": "crowd", "op": "add", "value": -3, "reason": "可疑人物离开"},
             {"target": "scene_attribute", "field": "noise", "op": "add", "value": -2, "reason": "谈话声暂停"},
@@ -336,7 +337,7 @@ DEFAULT_EVENT_DEFS = [
         45,
         None,  # target_need
         "给当前场景加入轻微环境扰动。",
-        "墙面纪念屏短暂失真，名单和头像跳成噪点，服务区有人低声抱怨设备维护又被拖延。",
+        "",
         [
             {"target": "scene_attribute", "field": "noise", "op": "add", "value": 4, "reason": "全息故障引起注意"},
             {"target": "scene_attribute", "field": "order", "op": "add", "value": -2, "reason": "设备故障"},
@@ -352,7 +353,7 @@ DEFAULT_EVENT_DEFS = [
         25,
         None,  # target_need
         "酸雨天气时可能触发渗漏，让角色注意到环境恶化。",
-        "外面的酸雨透过破损的密封条渗进来，在地上留下淡淡的腐蚀痕迹。",
+        "",
         [
             {"target": "scene_attribute", "field": "warmth", "op": "add", "value": -3, "reason": "外界污染渗入"},
             {"target": "scene_attribute", "field": "order", "op": "add", "value": -4, "reason": "环境恶化"},
@@ -368,7 +369,7 @@ DEFAULT_EVENT_DEFS = [
         100,
         None,  # target_need
         "世界紧张度过高时，提醒角色冲突正在靠近。",
-        "几个人的手不约而同移向腰间，门口站着的人挡住退路，室内提示灯在沉默里持续低鸣。",
+        "",
         [
             {"target": "scene_attribute", "field": "order", "op": "add", "value": -8, "reason": "冲突一触即发"},
             {"target": "world_state", "field": "tension", "op": "add", "value": -2, "reason": "压力被释放"},
@@ -385,7 +386,7 @@ DEFAULT_EVENT_DEFS = [
         40,
         "money_low",  # target_need
         "针对缺钱的角色，提供赚钱机会。",
-        "一个穿着体面的掮客走进来，在服务台放下一张数据芯片：'简单活儿，今晚就能结账。谁感兴趣？'",
+        "",
         [
             {"target": "scene_attribute", "field": "noise", "op": "add", "value": 3, "reason": "有新委托"},
         ],
@@ -400,7 +401,7 @@ DEFAULT_EVENT_DEFS = [
         40,
         "mood_low",  # target_need
         "针对心情低落的角色，给予情感支持。",
-        "酒保把一杯低温合成酒推过来：'这杯算我的，看你今晚不太顺。'",
+        "",
         [
             {"target": "scene_attribute", "field": "warmth", "op": "add", "value": 5, "reason": "酒保的善意"},
         ],
@@ -415,7 +416,7 @@ DEFAULT_EVENT_DEFS = [
         40,
         "health_low",  # target_need
         "针对健康状况不佳的角色，提供照料。",
-        "一个义体医生注意到某人脸色不对，丢过来一个急救喷雾：'先用着，回头找我做次检查。'",
+        "",
         [
             {"target": "scene_attribute", "field": "warmth", "op": "add", "value": 6, "reason": "医疗援助"},
         ],
@@ -430,7 +431,7 @@ DEFAULT_EVENT_DEFS = [
         40,
         "energy_low",  # target_need
         "针对精力不足的角色，提供休息机会。",
-        "包厢区有个隔音隔间空出来了，柔和照明和独立通风正好能让人喘口气。",
+        "",
         [
             {"target": "scene_attribute", "field": "order", "op": "add", "value": 2, "reason": "安静空间"},
         ],
@@ -446,7 +447,7 @@ DEFAULT_EVENT_DEFS = [
         100,
         None,
         "为寻找情报的角色提供线索或机会。",
-        "一个神秘的中间人走进来，在服务台边低声说：'有人愿意出高价买最近荒坂的内网日志。你们谁有门路？'",
+        "",
         [
             {"target": "scene_attribute", "field": "noise", "op": "add", "value": -5, "reason": "敏感话题引起警觉"},
             {"target": "world_state", "field": "tension", "op": "add", "value": 3, "reason": "公司情报交易风险高"},
@@ -462,7 +463,7 @@ DEFAULT_EVENT_DEFS = [
         100,
         None,
         "给被追踪的角色施加压力。",
-        "门口停下一辆荒坂标志的黑色浮空车，几个穿西装的家伙在扫描酒吧入口，不过还没进来。",
+        "",
         [
             {"target": "scene_attribute", "field": "order", "op": "add", "value": -6, "reason": "公司特工出现"},
             {"target": "world_state", "field": "tension", "op": "add", "value": 5, "reason": "荒坂介入"},
@@ -478,7 +479,7 @@ DEFAULT_EVENT_DEFS = [
         35,
         "money_low",
         "为网络行者提供赚钱机会。",
-        "一个戴着反光镜的富商走进来，直接说：'我需要人破解一个公司防火墙，酬劳五位数，今晚能动手吗？'",
+        "",
         [
             {"target": "scene_attribute", "field": "noise", "op": "add", "value": 4, "reason": "高价委托引起注意"},
         ],
@@ -493,7 +494,7 @@ DEFAULT_EVENT_DEFS = [
         100,
         None,
         "给欠债角色施加压力。",
-        "酒吧门被粗暴推开，两个手臂装着重型义体的催收员走进来，扫视着人群：'欠钱的最好主动站出来。'",
+        "",
         [
             {"target": "scene_attribute", "field": "order", "op": "add", "value": -10, "reason": "暴力催收"},
             {"target": "world_state", "field": "tension", "op": "add", "value": 4, "reason": "冲突威胁"},
@@ -509,7 +510,7 @@ DEFAULT_EVENT_DEFS = [
         30,
         None,
         "为义体医生提供业务机会。",
-        "一个佣兵捂着冒火花的义体手臂冲进来，脸色发白：'谁能帮我紧急修一下？手臂过载了！'",
+        "",
         [
             {"target": "scene_attribute", "field": "noise", "op": "add", "value": 6, "reason": "紧急情况"},
             {"target": "scene_attribute", "field": "order", "op": "add", "value": -3, "reason": "混乱"},
@@ -525,7 +526,7 @@ DEFAULT_EVENT_DEFS = [
         100,
         None,
         "为脱离帮派的角色带来过往冲突。",
-        "几个虎爪帮的人推门进来，领头的盯着某个角色冷笑：'叛徒也敢在这喝酒？今晚该算算旧账了。'",
+        "",
         [
             {"target": "scene_attribute", "field": "order", "op": "add", "value": -12, "reason": "帮派对峙"},
             {"target": "world_state", "field": "tension", "op": "add", "value": 8, "reason": "暴力冲突迫在眉睫"},
@@ -541,7 +542,7 @@ DEFAULT_EVENT_DEFS = [
         25,
         None,
         "为追求名声的佣兵提供高难度机会。",
-        "墙上的全息屏突然亮起，显示一条匿名委托：'寻找敢单挑荒坂运输队的佣兵，报酬丰厚，成功者将被载入传奇。'",
+        "",
         [
             {"target": "scene_attribute", "field": "noise", "op": "add", "value": 8, "reason": "传奇委托震动全场"},
             {"target": "world_state", "field": "tension", "op": "add", "value": 2, "reason": "高风险任务"},
@@ -557,7 +558,7 @@ DEFAULT_EVENT_DEFS = [
         35,
         None,
         "为维持声誉的佣兵提供口碑机会。",
-        "一个看起来像掮客的人走到某个角色面前：'听说你做事稳，有个老客户想再合作一次，保证干净利落。'",
+        "",
         [
             {"target": "scene_attribute", "field": "warmth", "op": "add", "value": 3, "reason": "专业认可"},
         ],
@@ -572,7 +573,7 @@ DEFAULT_EVENT_DEFS = [
         30,
         None,
         "为寻找搭档的角色提供合作机会。",
-        "服务区旁坐着一个陌生的年轻佣兵，身上的装备都很新但搭配专业，看起来是在等人组队。",
+        "",
         [
             {"target": "scene_attribute", "field": "noise", "op": "add", "value": 2, "reason": "新面孔"},
         ],
@@ -846,6 +847,7 @@ def _migrate_existing_tables(conn: sqlite3.Connection) -> None:
           stakes TEXT NOT NULL DEFAULT '{}',
           priority INTEGER NOT NULL DEFAULT 50,
           beat_count INTEGER NOT NULL DEFAULT 0,
+          stalled_turns INTEGER NOT NULL DEFAULT 0,
           created_tick INTEGER NOT NULL DEFAULT 0,
           updated_tick INTEGER NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -871,6 +873,7 @@ def _migrate_existing_tables(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "event_defs", "effects", "ALTER TABLE event_defs ADD COLUMN effects TEXT NOT NULL DEFAULT '[]'")
     _ensure_column(conn, "world_state", "drama", "ALTER TABLE world_state ADD COLUMN drama INTEGER NOT NULL DEFAULT 30")
     _ensure_column(conn, "event_defs", "target_need", "ALTER TABLE event_defs ADD COLUMN target_need TEXT")
+    _ensure_column(conn, "story_threads", "stalled_turns", "ALTER TABLE story_threads ADD COLUMN stalled_turns INTEGER NOT NULL DEFAULT 0")
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:

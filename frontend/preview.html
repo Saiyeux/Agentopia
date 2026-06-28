@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agentopia — preview</title>
+    <link rel="stylesheet" href="src/styles.css" />
+    <style>
+      /* preview-only: lucide icons render at given size */
+      .ic { width: 1em; height: 1em; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!-- icon sprite -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <g id="i-activity"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></g>
+        <g id="i-users"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></g>
+        <g id="i-scroll"><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></g>
+        <g id="i-file"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></g>
+        <g id="i-server"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></g>
+        <g id="i-refresh"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></g>
+        <g id="i-sparkles"><path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/></g>
+        <g id="i-db"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></g>
+        <g id="i-play"><polygon points="6 3 20 12 6 21 6 3"/></g>
+        <g id="i-trash"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></g>
+        <g id="i-save"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></g>
+        <g id="i-key"><path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></g>
+      </defs>
+    </svg>
+
+    <script>
+      const I = (id, size) => `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24"><use href="#i-${id}"/></svg>`;
+
+      const characters = [
+        {
+          name: "凛 · Rin",
+          summary: "义体改造的赏金猎人，在霓虹地下城讨生活，习惯先开枪后谈判，却始终为旧日的伙伴守着一份柔软。",
+          attrs: [["职业", "赏金猎人"], ["金钱", "¥ 4,820"], ["精力", "72"], ["所在地", "下城 · 7区"]],
+          traits: [["攻击性", 78], ["谨慎", 54], ["共情", 41], ["冷静", 66]],
+          rels: [["卡西安", "熟悉 60 · 好感 +12 · 信任 35 · 尊重 48"], ["薇拉", "熟悉 25 · 好感 -8 · 信任 10 · 尊重 30"]]
+        },
+        {
+          name: "卡西安 · Cassian",
+          summary: "穿梭于企业高墙之间的信息掮客，言语温和，手段不留痕迹。掌握着关于这座城市最危险的几个秘密。",
+          attrs: [["职业", "信息掮客"], ["金钱", "¥ 19,400"], ["精力", "58"], ["所在地", "中城 · 云端"]],
+          traits: [["智谋", 91], ["谨慎", 84], ["共情", 60], ["攻击性", 22]],
+          rels: [["凛", "熟悉 60 · 好感 +18 · 信任 40 · 尊重 55"]]
+        },
+        {
+          name: "薇拉 · Vera",
+          summary: "教会区的街头医生，用回收的药剂和倔强的善意缝合这座城市的伤口。对暴力深恶痛绝。",
+          attrs: [["职业", "街头医生"], ["金钱", "¥ 1,260"], ["精力", "44"], ["所在地", "教会区"]],
+          traits: [["共情", 88], ["冷静", 71], ["攻击性", 9], ["谨慎", 63]],
+          rels: []
+        }
+      ];
+
+      const logs = [
+        { type: "narration", tick: 142, actor: "世界", content: "雨水顺着全息广告牌滑落，把霓虹切成无数条颤抖的光带。下城 7 区的夜市刚刚醒来。" },
+        { type: "speech", tick: 143, actor: "凛", content: "「我只问一次——那批货到底是谁的？」她把椅子往前一拖，金属脚在地面划出刺耳的声响。", verdict: ["卡西安 信任 35→32（-3）", "凛 → 卡西安 好感 12→10（-2）"] },
+        { type: "speech", tick: 144, actor: "卡西安", content: "「放轻松，凛。我们是老朋友了。」他笑着把一杯合成酒推过桌面，目光却没有半分温度。" },
+        { type: "event", tick: 145, actor: "世界", content: "远处传来一声闷响，整条街的灯光闪烁了一瞬。治安无人机的探照灯扫过巷口。" },
+        { type: "verdict", tick: 146, actor: "裁定", content: "本回合判定：场面张力上升，凛的攻击性临时 +6。" }
+      ];
+
+      function tabBtn(key, icon, label) {
+        return `<button class="tab-button" data-tab="${key}" type="button">${I(icon, 17)}<span>${label}</span></button>`;
+      }
+
+      function worldPanel() {
+        const metrics = [["Tick", "1426"], ["Day", "12"], ["Chapter", "3"], ["Period", "深夜"], ["Weather", "酸雨"], ["Tension", "67"], ["Economy", "−4.2"]];
+        return `<section class="panel world-panel">
+          <div class="panel-title"><div>${I("activity", 18)}<h2>世界状态</h2></div></div>
+          <div class="metric-grid">${metrics.map(([l, v]) => `<div class="metric"><span>${l}</span><strong>${v}</strong></div>`).join("")}</div>
+          <p class="worldview">霓虹之城 Neo-Kowloon：企业财阀盘踞云端，下城在永不停歇的酸雨中自我消化。义体、黑市与逃不掉的债务，是这里每个人的底色。</p>
+          <div class="scene-strip"><span>当前场景</span><strong>下城夜市 · 债务谈判</strong><small>#48 · 3/8 · 3 人</small></div>
+          <div class="threads">${I("sparkles", 16)}<span>5 条剧情线</span></div>
+        </section>`;
+      }
+
+      function charactersPanel() {
+        const cards = characters.map((c) => `
+          <article class="character-card">
+            <div class="character-heading"><div><h3>${c.name}</h3></div>${I("db", 16)}</div>
+            <p>${c.summary}</p>
+            <div class="kv-list">${c.attrs.map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`).join("")}</div>
+            <div class="trait-list">${c.traits.map(([k, v]) => `<div class="trait-row"><span>${k}</span><div class="trait-bar"><i style="width:${v}%"></i></div><strong>${v}</strong></div>`).join("")}</div>
+            <div class="relationship-list"><h4>角色关系</h4>${
+              c.rels.length
+                ? c.rels.map(([n, s]) => `<div class="relationship-row"><strong>${n}</strong><span>${s}</span></div>`).join("")
+                : `<small>尚未直接认识其他角色</small>`
+            }</div>
+          </article>`).join("");
+        return `<section class="panel characters-panel">
+          <div class="panel-title"><div>${I("users", 18)}<h2>角色</h2></div>
+            <div style="display:flex;gap:8px">
+              <button class="mode-button" type="button">还原角色</button>
+              <button class="danger-button" type="button">完全重置</button>
+            </div>
+          </div>
+          <div class="character-list">${cards}</div>
+        </section>`;
+      }
+
+      function logPanel() {
+        const entries = logs.map((l) => `
+          <article class="log-entry log-entry-${l.type}">
+            <div class="log-meta"><span class="log-type">${l.type}</span><span>tick ${l.tick}</span><span>${l.actor}</span></div>
+            <p class="log-content">${l.content}</p>
+            ${l.verdict ? `<div class="verdict-result"><span class="verdict-label">结果</span><ul>${l.verdict.map((v) => `<li>${v}</li>`).join("")}</ul></div>` : ""}
+          </article>`).join("");
+        return `<section class="panel log-panel">
+          <div class="log-toolbar">
+            <div class="panel-title"><div>${I("scroll", 18)}<h2>事件流</h2></div></div>
+            <div class="run-controls">
+              <div class="control-group primary-controls">
+                <button class="primary-action" type="button">${I("play", 16)}<span>一拍</span></button>
+                <button class="mode-button active" type="button">停止</button>
+              </div>
+              <div class="control-group utility-controls">
+                <button class="mode-button" type="button">首句</button>
+                <button class="danger-button" type="button">${I("trash", 15)}<span>清理</span></button>
+              </div>
+            </div>
+          </div>
+          <div class="log-list">${entries}</div>
+        </section>`;
+      }
+
+      function apiPanel() {
+        return `<section class="panel api-panel">
+          <div class="panel-title"><div>${I("server", 18)}<h2>API 配置</h2></div></div>
+          <div class="settings-form">
+            <div class="provider-control" role="tablist">
+              <button class="provider-button active" type="button">LM Studio</button>
+              <button class="provider-button" type="button">Ollama</button>
+              <button class="provider-button" type="button">API</button>
+            </div>
+            <label class="field"><span>API 地址</span><input value="http://127.0.0.1:1234/v1" /></label>
+            <label class="field"><span>API 密钥</span>
+              <div class="input-with-icon">${I("key", 16)}<input type="password" placeholder="本地服务可留空" /></div>
+            </label>
+            <label class="field"><span>模型</span>
+              <div class="model-row">
+                <select><option>qwen-agentworld-35b-a3b</option><option>llama-3.1-8b-instruct</option></select>
+                <button class="mode-button" type="button">拉模型</button>
+              </div>
+            </label>
+            <div class="settings-actions">
+              <button class="primary-action" type="button">${I("save", 16)}<span>保存</span></button>
+              <button class="mode-button" type="button">测试</button>
+              <button class="mode-button" type="button">刷新</button>
+            </div>
+            <div class="settings-status"><p>连接正常，可见模型 14 个。</p></div>
+          </div>
+        </section>`;
+      }
+
+      function promptPanel() {
+        const list = [
+          ["角色决策", "actor_decision.md"],
+          ["场景导演", "scene_director.md"],
+          ["世界叙述", "world_narration.md"],
+          ["裁定器", "judge_verdict.md"]
+        ];
+        return `<section class="panel prompt-panel">
+          <div class="panel-title"><div>${I("file", 18)}<h2>提示词与处理链路</h2></div>
+            <button class="mode-button" type="button">刷新</button>
+          </div>
+          <div class="prompt-layout">
+            <aside class="prompt-list">${list
+              .map((p, i) => `<button class="prompt-list-item${i === 0 ? " active" : ""}" type="button"><strong>${p[0]}</strong><span>${p[1]}</span></button>`)
+              .join("")}</aside>
+            <div class="prompt-editor">
+              <div class="prompt-heading">
+                <div><h3>角色决策</h3><p>每一拍中，角色据此权衡自身状态、关系与场景目标，产出下一步行动。</p><small>actor_decision.md</small></div>
+                <div class="settings-actions">
+                  <button class="primary-action" type="button">${I("save", 16)}<span>保存</span></button>
+                  <button class="danger-button" type="button">恢复默认</button>
+                </div>
+              </div>
+              <textarea class="prompt-textarea" spellcheck="false">你是 {{character.name}}，正身处「{{scene.title}}」。
+
+# 你的状态
+- 心情：{{character.mood}}　精力：{{character.energy}}
+- 当前目标：{{scene.purpose}}
+
+# 在场角色
+{{participants}}
+
+请根据你的性格特质与上述关系，输出下一步行动（一句台词或一个动作），并说明动机。</textarea>
+              <div class="settings-status"><p>已保存，下一次模型调用会读取这份内容。</p></div>
+            </div>
+          </div>
+        </section>`;
+      }
+
+      const panels = { world: worldPanel, characters: charactersPanel, logs: logPanel, prompts: promptPanel, api: apiPanel };
+      let active = "world";
+
+      function render() {
+        document.getElementById("root").innerHTML = `
+          <main class="app-shell">
+            <header class="topbar">
+              <div><h1>Agentopia</h1><p>自主角色世界模拟器</p></div>
+              <button class="icon-button" title="刷新">${I("refresh", 18)}</button>
+            </header>
+            <nav class="tabs" aria-label="主视图">
+              ${tabBtn("world", "activity", "世界")}
+              ${tabBtn("characters", "users", "角色")}
+              ${tabBtn("logs", "scroll", "事件 24")}
+              ${tabBtn("prompts", "file", "提示词")}
+              ${tabBtn("api", "server", "API")}
+            </nav>
+            <section class="dashboard">${panels[active]()}</section>
+          </main>`;
+        document.querySelectorAll(".tab-button").forEach((b) => {
+          if (b.dataset.tab === active) b.classList.add("active");
+          b.addEventListener("click", () => { active = b.dataset.tab; render(); });
+        });
+      }
+
+      render();
+    </script>
+  </body>
+</html>

@@ -20,7 +20,7 @@ def verdict_schema(character_ids: list[str]) -> dict[str, Any]:
         "type": "object",
         "properties": {
             "success": {"type": "boolean"},
-            "narration": {"type": "string"},
+            "narration": {"type": "string", "minLength": 1},
             "deltas": {
                 "type": "array",
                 "items": {
@@ -79,23 +79,11 @@ def adjudicate_action(
         present_characters=present_characters,
         recent_scene_log=_recent_log(conn, int(scene["id"]) if scene is not None else None),
     )
-    try:
-        result = chat_json_schema(
-            schema_name="agentopia_verdict",
-            schema=verdict_schema(present_ids),
-            system=system,
-            user=user,
-            temperature=0.4,
-            max_tokens=384,
-        )
-    except Exception as exc:
-        return {
-            "success": False,
-            "narration": "裁定完成，本拍无数值变化。",
-            "deltas": [],
-            "raw_deltas": [],
-            "usage": {},
-        }
+    result = _call_judge_with_retry(
+        schema=verdict_schema(present_ids),
+        system=system,
+        user=user,
+    )
     verdict = result["parsed"]
     direct_targets = _direct_targets(action, set(present_ids))
     deltas = [
@@ -110,6 +98,31 @@ def adjudicate_action(
         "raw_deltas": verdict.get("deltas", []),
         "usage": result["usage"],
     }
+
+
+def _call_judge_with_retry(*, schema: dict[str, Any], system: str, user: str) -> dict[str, Any]:
+    errors: list[str] = []
+    attempts = [
+        user,
+        user
+        + "\n上一轮裁定没有返回合格 JSON 或 narration 为空。请只返回 JSON；narration 必须用一句新的中文说明裁定依据，不能留空。",
+    ]
+    for index, prompt in enumerate(attempts):
+        try:
+            result = chat_json_schema(
+                schema_name="agentopia_verdict",
+                schema=schema,
+                system=system,
+                user=prompt,
+                temperature=0.4 if index == 0 else 0.25,
+                max_tokens=384,
+            )
+            parsed = result.get("parsed", {})
+            _safe_narration(str(parsed.get("narration") or ""))
+            return result
+        except Exception as exc:
+            errors.append(str(exc))
+    raise ValueError("裁定生成失败: " + "; ".join(errors[-2:]))
 
 
 def _to_delta(
@@ -160,7 +173,10 @@ def _direct_targets(action: dict[str, Any], present_ids: set[str]) -> set[str]:
 
 
 def _safe_narration(text: str) -> str:
-    return sanitize_display_text(text, "裁定完成，本拍无数值变化。")
+    cleaned = sanitize_display_text(text, "")
+    if not cleaned:
+        raise ValueError("裁定模型没有返回可用 narration")
+    return cleaned
 
 
 def _character_attributes(conn: sqlite3.Connection, char_id: str) -> dict[str, Any]:

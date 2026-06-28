@@ -301,6 +301,8 @@ def _looks_like_contract_json(text: str) -> bool:
         or "'deltas'" in text
         or '"opening"' in text
         or "'opening'" in text
+        or '"narration"' in text
+        or "'narration'" in text
     )
 
 
@@ -473,6 +475,14 @@ def _candidate_score(candidate: str, schema_name: str) -> int:
                 score += 1000
     elif schema_name == "agentopia_verdict":
         for field in ('"success"', '"narration"', '"deltas"'):
+            if field in candidate:
+                score += 1000
+    elif schema_name == "agentopia_world_event":
+        for field in ('"narration"',):
+            if field in candidate:
+                score += 1000
+    elif schema_name == "agentopia_opening":
+        for field in ('"opening"',):
             if field in candidate:
                 score += 1000
     return score

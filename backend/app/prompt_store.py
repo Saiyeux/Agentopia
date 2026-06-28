@@ -33,10 +33,21 @@ DEFAULT_PROMPTS: dict[str, str] = {
 10. 优先推进 short_term_goals：如果当前情境允许，应主动采取行动而非只说话；说出的话应该为下一步行动铺路。
 11. 只有明确转换话题时才填写新的 topic；否则沿用当前话题或留空。
 12. relationships_to_present_characters 只列出 actor 已直接认识的人；未列出的在场者只是陌生人，不能假装熟悉其经历或态度。
-13. 如果 active_story_threads 非空，优先承接最相关的剧情线程：询问细节、提出条件、分工、执行一步或汇报结果；不要马上另接一个无关新委托。
-14. ambient world events 只是环境小事，可以自然提及，但不要让它们打断正在推进的剧情线程。
-15. 注意剧情阶段：刚出现/正在讨论/正在确认条件时，不要说成已经完成；已经接下/正在执行时，必须推进一个具体动作或给出具体发现，避免只重复问题。""",
-    "character_task_instruction": """作为 actor，你的首要任务是推进 short_term_goals 和 active_story_threads。若 active_story_threads 非空，围绕当前线程继续推进：问清条件、提出交换、分工、执行一步或汇报结果；不要重复“我接了”也不要立刻转向新委托。讨论和确认条件阶段不能假装任务完成；接下或执行阶段要给出可裁定的具体行动。若没有活动线程，再自然回应现场或主动推进目标。说话时要为下一步行动铺路，避免复述旧目标。""",
+13. 如果 active_story_threads 非空，承接最相关的一条推进它。但若该线程的 stale 为真、或 stage 已停在某阶段多拍没有实质进展，就主动收束它、或暂时搁置转向别的事。搁置不是放弃。
+14. ambient world events 多为背景，但当它与你的目标/性格相关、或当前线程已停滞时，可以让它真正改变你这拍的关注点。世界不该对发生的事永远无动于衷。
+15. 注意剧情阶段：刚出现/正在讨论/正在确认条件时，不要说成已经完成；已经接下/正在执行时，必须推进一个具体动作或给出具体发现，避免只重复问题。
+16. 不必每拍都谈目标或线程。角色也会做与目标无关的小事、对别人的话题产生临时兴趣、观察、走神、闲扯。这些“无用”细节正是世界显得活的原因。
+17. 不同角色对同一件事关注度不同。当已有人在处理某条线程时，其他人应去推进各自不同的关注点，而不是一起围观同一个问题。与你性格/目标无关的线程，可以只旁观、简短回应或岔开。
+18. 说话要有明确对象：直接回应某人时填写 to；对所有人、环境或自言自语时才用 null。
+19. 如果 dialogue_context.directed_to_me 为真，优先回应上一句对你的问题、请求或挑衅；如果只是 overheard，可以插话、旁观或转向自己的事。
+20. 禁止空泛短句，例如“你在干嘛”“你想干什么”“嘿，来生？”；每句都要带具体信息、态度、问题对象或下一步动作。
+21. 如果 action.type 是 move，action.target 必须填写 scene.available_locations 中存在的地点 id；不要把地点只写在 detail 里。移动后你会进入那个地点的独立场景。
+22. present_characters 只是你当前小组里能直接互动的人，不代表同一地点的所有人；不要回应你没有听见的其他场景对话。
+23. 当当前小组话题与你无关、你需要私聊、避开冲突或追踪线索时，可以选择 move 到相连地点，让世界分成多个并行小场景。""",
+    "character_task_instruction": """作为 actor，你这拍可以推进一条 active_story_threads、推进自己的 short_term_goals、或只是自然地活在场景里——按情境择一，不必每拍都服务任务。
+若推进线程：问清条件、提出交换、分工、执行一步或汇报结果；讨论阶段不能假装完成。
+若线程已停滞或与你无关：搁置它，转向别的人、话题或一件与目标无关的小事。
+说话尽量为下一步铺路，但允许偶尔只是闲谈或观察。避免机械复述旧目标。""",
     "judge_system": """你是 Agentopia 的裁定层模型。
 你判断 actor 本拍的台词和行动意图是否对在场角色造成直接影响，并给出变化量 delta。
 
@@ -47,16 +58,16 @@ DEFAULT_PROMPTS: dict[str, str] = {
 4. 不要编造不存在的角色、地点、物品和历史。
 5. 普通闲聊通常不产生数值变化；明确安慰、冒犯、威胁、帮助、交易、消耗体力等才给 delta。
 6. 这一阶段只裁定角色属性和人物关系，不裁定场景/世界变化。
-7. 关系变化只能从 actor 指向其本拍明确说话或行动的对象；普通寒暄无需改变关系。""",
+7. 关系变化只能从 actor 指向其本拍明确说话或行动的对象；普通寒暄无需改变关系。
+8. narration 必须非空。即使 deltas 为空，也要用一句新的中文说明为什么这拍没有形成可落库影响。""",
     "opening_system": """你是 Agentopia 的场景开场生成器。你的任务是根据结构化事实生成一句新的环境开场，而不是复述输入文案。
 
 要求：
 - 只输出一句中文环境开场，20-40个汉字
 - 只描写环境和氛围，不涉及具体角色姓名
 - 不要解释、不要分析、不要英文、不要复述任务
-- 不要照抄世界观、地点事实或最近已用开场中的措辞
-- 不要固定依赖某一组赛博朋克意象，允许偶尔使用环境词，但每次要换观察角度
-- 从声音、秩序、人群密度、距离感、设备状态、门口动静、空气温度、风险预兆中任选一两个角度""",
+- 不使用内置示例或固定意象库，只根据本次输入的世界观、地点事实、场景数值和最近开场自行生成
+- 同一场景每次开场换观察角度或感官通道，不复述最近开场的措辞""",
     "response_pipeline": """# Agentopia 回复处理链路
 
 ## 角色层
@@ -66,7 +77,9 @@ DEFAULT_PROMPTS: dict[str, str] = {
 4. LLM 必须返回 ACTION JSON：`speech`, `inner`, `action`, `to`, `topic`。
 5. `filter_action` 会检查 JSON 字段、目标角色是否在场、文本是否可显示。
 6. 合格 speech 写入 `scene_log(type='speech')`。
-7. 如果有活动剧情线，`record_thread_turn` 会根据 speech/action 推进剧情阶段；只有明确完成、失败、放弃、交付或撤离才收束。
+7. 如果有活动剧情线，`record_thread_turn` 会根据 speech/action 推进剧情阶段；阶段变化会清空 `stalled_turns`，无进展会累加。
+8. 线程停滞达到阈值后会变成 `parked`，不删除，但不再被每拍强推。
+9. `to` 表示这句话直接对谁说；被点名角色下一拍会被 scheduler 优先选中回应。`heard_by` 表示同场景里谁听见了这句话。
 
 ## 裁定层
 1. 后端把本拍 action、当前 scene、在场角色、最近事件交给裁定层。
@@ -81,6 +94,11 @@ DEFAULT_PROMPTS: dict[str, str] = {
 4. 不合法 delta 被拒绝，合法 delta 写入 SQLite。
 5. 裁定结果写入 `scene_log(type='verdict')`，前端把它挂在对应 speech 后面显示。
 
+## 对话接力
+1. `record_scene_turn` 会保存上一句的 speaker、recipient、topic、heard_by。
+2. 下一拍 `pick_next_actor` 优先选择上一句的 recipient；没有明确 recipient 时才按场景轮转。
+3. 角色 prompt 中会包含 `dialogue_context.directed_to_me / overheard / not_heard`，帮助模型区分“该回应我”还是“我只是旁听”。
+
 ## 开场层
 1. 后端读取当前 world、scene location、地点状态、最近 narration。
 2. 后端读取 `opening_system.md`，要求 LLM 返回 `{\"opening\":\"...\"}`。
@@ -88,16 +106,23 @@ DEFAULT_PROMPTS: dict[str, str] = {
 4. 合格 opening 写入 `scene_log(type='narration')`。
 
 ## 世界事件
-目前世界事件主要由本地事件系统按条件、权重、冷却触发，写入 `event_instances` 和 `scene_log(type='event')`。后续如果接世界层 LLM，应同样走 JSON 契约、白名单校验和 SQLite 落库。""",
+1. 本地事件系统只负责判断哪个事件类型被触发：条件、权重、冷却、target_need。
+2. `event_defs.narration` 不作为展示内容使用；当前库中应保持为空。
+3. 事件触发后，后端读取 `world_system.md`，把 event_def 的结构意图、当前 scene、world 和最近日志交给世界层 LLM。
+4. 世界层 LLM 必须返回 `{"narration":"..."}`。
+5. narration 为空、像英文分析、复述任务、或照抄 event_def/guidance，都会被拒绝并报错；不会写入 `scene_log`。
+6. 合格 narration 写入 `event_instances` 和 `scene_log(type='event')`。""",
     "world_system": """你是 Agentopia 的世界层模型。
-你只负责把已触发的世界事件演绎成当前场景中的可感知内容，并提出受控环境变化。
+你只负责把已触发的世界事件意图演绎成当前场景中的可感知内容。
 
 硬性规则：
 1. 只输出 JSON，不要解释，不要 markdown。
 2. 事件必须发生在当前 scene/location 内。
 3. 不要凭空创造注册表外的重要角色。
-4. 环境变化只能作为 delta 建议，最终由代码白名单落库。
-5. narration 要短，像游戏引擎的场景反馈，不要长篇小说。""",
+4. event_def 的 title/guidance/effects 只是结构意图，不是正文；不能照抄或复述为 narration。
+5. narration 必须是当场新生成的具体事件，短，像游戏引擎的场景反馈，不要长篇小说。
+6. 同类事件再次触发时，必须换人物、物件、声音、入口、设备、交易媒介或风险焦点。
+7. 不要写出任何角色 id（如 char_xxx），也不要让已注册角色替世界事件行动、递东西或说话；世界事件只写环境、陌生人、设备、传闻、压力或机会。""",
 }
 
 

@@ -5,8 +5,11 @@ import random
 import sqlite3
 from typing import Any
 
-from .db import dumps
+from .db import dumps, loads
 from .filtering import sanitize_display_text
+from .llm import chat_json_schema
+from .prompts import build_world_event_prompt
+from .scheduler import scene_prompt_slice
 from .threads import active_thread_count, create_thread_from_event, should_create_thread
 
 
@@ -246,7 +249,7 @@ def _fire_event(
     world: dict[str, Any],
     scene: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    narration = sanitize_display_text(row["narration"], "世界轻轻偏转了一下。")
+    narration = _generate_event_narration(conn, row, world, scene)
     tick = int(world["sim_tick"])
     scene_id = int(scene["id"]) if scene is not None else None
     location_id = str(scene["location_id"]) if scene is not None else "main_floor"
@@ -255,6 +258,7 @@ def _fire_event(
         "title": row["title"],
         "tier": row["tier"],
         "guidance": row["guidance"],
+        "generated_by": "world_llm",
         "scene_id": scene_id,
         "location_id": location_id,
     }
@@ -299,3 +303,128 @@ def _fire_event(
         "narration": narration,
         "thread_id": thread_id,
     }
+
+
+def _generate_event_narration(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    world: dict[str, Any],
+    scene: dict[str, Any] | None,
+) -> str:
+    schema = {
+        "type": "object",
+        "properties": {"narration": {"type": "string"}},
+        "required": ["narration"],
+        "additionalProperties": False,
+    }
+    character_rows = conn.execute("SELECT id, name FROM characters").fetchall()
+    character_refs = {item for row in character_rows for item in (row["id"], row["name"]) if item}
+    source_texts = [str(row["narration"] or ""), str(row["guidance"] or ""), *character_refs]
+    event_def = dict(row)
+    event_def["effects"] = loads(row["effects"], [])
+    scene_slice = scene_prompt_slice(conn, scene) if scene is not None else None
+    recent = _recent_scene_log(conn, int(scene["id"]) if scene is not None else None)
+    system, user = build_world_event_prompt(
+        world=world,
+        event_def=event_def,
+        scene=scene,
+        scene_slice=scene_slice,
+        recent_scene_log=recent,
+    )
+    attempts = [
+        user,
+        user + "\n上一轮不合格。请重新生成，不要分析，不要复述输入，只返回 JSON。",
+    ]
+    errors: list[str] = []
+    for index, prompt in enumerate(attempts):
+        try:
+            result = chat_json_schema(
+                schema_name="agentopia_world_event",
+                schema=schema,
+                system=system,
+                user=prompt,
+                temperature=0.78 if index == 0 else 0.62,
+                max_tokens=180,
+            )
+            parsed = result.get("parsed", {})
+            raw = str(parsed.get("narration") or result.get("content", ""))
+            return _normalize_event_narration(raw, source_texts=source_texts, character_refs=character_refs)
+        except Exception as exc:
+            errors.append(str(exc))
+    raise ValueError("世界事件生成失败: " + "; ".join(errors[-2:]))
+
+
+def _normalize_event_narration(raw_content: str, source_texts: list[str], character_refs: set[str]) -> str:
+    content = raw_content.strip().strip('"\'`')
+    if not content:
+        raise ValueError("世界模型未返回事件内容")
+    cleaned = sanitize_display_text(content, "")
+    if not cleaned:
+        raise ValueError(f"世界事件内容不可用: {raw_content[:160]}")
+    if not _is_valid_event_narration(cleaned, source_texts, character_refs):
+        raise ValueError(f"世界事件内容不合格: {raw_content[:160]}")
+    return cleaned
+
+
+def _is_valid_event_narration(text: str, source_texts: list[str], character_refs: set[str]) -> bool:
+    if not 8 <= len(text) <= 140:
+        return False
+    cjk_count = sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
+    ascii_letters = sum(1 for char in text if char.isascii() and char.isalpha())
+    if cjk_count < 8 or ascii_letters > 12:
+        return False
+    blocked = ("任务", "要求", "输出", "JSON", "event_def", "guidance", "narration", "不要", "根据", "char_")
+    if any(marker in text for marker in blocked):
+        return False
+    if any(ref and ref in text for ref in character_refs):
+        return False
+    return not _copies_source_text(text, source_texts)
+
+
+def _copies_source_text(text: str, source_texts: list[str]) -> bool:
+    compact = _compact_cjk(text)
+    if len(compact) < 10:
+        return False
+    for source in source_texts:
+        source_compact = _compact_cjk(source)
+        if not source_compact:
+            continue
+        if compact in source_compact:
+            return True
+        window = 10
+        chunks = {
+            compact[index : index + window]
+            for index in range(0, max(1, len(compact) - window + 1), window)
+        }
+        hits = sum(1 for chunk in chunks if len(chunk) == window and chunk in source_compact)
+        if hits >= 2:
+            return True
+    return False
+
+
+def _compact_cjk(text: str) -> str:
+    return "".join(char for char in text if "\u4e00" <= char <= "\u9fff")
+
+
+def _recent_scene_log(conn: sqlite3.Connection, scene_id: int | None) -> list[dict[str, Any]]:
+    if scene_id is None:
+        rows = conn.execute(
+            """
+            SELECT tick, actor_id, type, content
+            FROM scene_log
+            ORDER BY id DESC
+            LIMIT 8
+            """
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT tick, actor_id, type, content
+            FROM scene_log
+            WHERE scene_id = ?
+            ORDER BY id DESC
+            LIMIT 8
+            """,
+            (scene_id,),
+        ).fetchall()
+    return [dict(row) for row in reversed(rows)]

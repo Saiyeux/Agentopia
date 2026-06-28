@@ -6,6 +6,9 @@ from typing import Any
 from .db import dumps, loads
 
 
+PARK_AFTER = 3
+
+
 THREAD_EVENT_IDS = {
     "weighted_gig_offer",
     "weighted_synth_drink",
@@ -143,6 +146,8 @@ def active_thread_slice(
                 "participants": participants,
                 "stakes": loads(row["stakes"], {}),
                 "beat_count": row["beat_count"],
+                "stalled_turns": row["stalled_turns"],
+                "stale": int(row["stalled_turns"]) >= PARK_AFTER,
                 "recent_beats": [dict(beat) for beat in reversed(beats)],
             }
         )
@@ -155,11 +160,15 @@ def thread_situation(threads: list[dict[str, Any]]) -> str | None:
     if not threads:
         return None
     thread = threads[0]
+    if thread.get("stale"):
+        return (
+            f"当前剧情线程《{thread['title']}》已经在{thread['stage_label']}阶段停滞。"
+            "这条线索可以推进、收个尾、或先放一放，转向别的人、话题或小事。"
+        )
     return (
         f"当前剧情线程《{thread['title']}》处于{thread['stage_label']}阶段。"
-        "本拍要承接它继续问清条件、提出方案、分工、执行一步或给出具体结果。"
-        "只有出现明确完成、失败、放弃、交付或撤离结果时，剧情线才算收束。"
-        "普通追问、报价、检查、准备动作都不能当作结局。"
+        "可以承接它继续问清条件、提出方案、分工、执行一步或给出具体结果；"
+        "也可以在与你无关时简短旁观，把注意力转向更符合你目标或性格的事。"
     )
 
 
@@ -180,8 +189,17 @@ def record_thread_turn(
     speech = str(action.get("speech") or "")
     proposed = action.get("action")
     data = {"action": action, "speech_log_id": log_id}
-    new_stage = _next_stage(thread["stage"], speech, proposed, int(thread["beat_count"]))
-    new_status = "resolved" if new_stage == "resolved" else "active"
+    previous_stage = str(thread["stage"])
+    current_stalled = int(thread.get("stalled_turns") or 0)
+    new_stage = _next_stage(previous_stage, speech, proposed, int(thread["beat_count"]), current_stalled)
+    progressed = new_stage != previous_stage
+    next_stalled = 0 if progressed else current_stalled + 1
+    if new_stage == "resolved":
+        new_status = "resolved"
+    elif next_stalled >= PARK_AFTER:
+        new_status = "parked"
+    else:
+        new_status = "active"
     conn.execute(
         """
         INSERT INTO story_beats (thread_id, tick, actor_id, beat_type, content, data)
@@ -196,12 +214,14 @@ def record_thread_turn(
             status = ?,
             summary = ?,
             beat_count = beat_count + 1,
+            stalled_turns = ?,
             updated_tick = ?
         WHERE id = ?
         """,
-        (new_stage, new_status, _updated_summary(thread, speech, new_stage), tick, thread["id"]),
+        (new_stage, new_status, _updated_summary(thread, speech, new_stage), next_stalled, tick, thread["id"]),
     )
-    if new_status == "resolved":
+    if new_status in {"resolved", "parked"}:
+        verb = "暂时收束" if new_status == "resolved" else "暂时搁置"
         conn.execute(
             """
             INSERT INTO scene_log (scene_id, tick, actor_id, type, content, data, visibility)
@@ -210,11 +230,11 @@ def record_thread_turn(
             (
                 int(scene["id"]) if scene is not None else None,
                 tick,
-                f"剧情线《{thread['title']}》暂时收束：{speech[:80]}",
-                dumps({"thread_id": thread["id"], "stage": new_stage}),
+                f"剧情线《{thread['title']}》{verb}：{speech[:80]}",
+                dumps({"thread_id": thread["id"], "stage": new_stage, "status": new_status, "stalled_turns": next_stalled}),
             ),
         )
-    return {"thread_id": thread["id"], "stage": new_stage, "status": new_status}
+    return {"thread_id": thread["id"], "stage": new_stage, "status": new_status, "stalled_turns": next_stalled}
 
 
 def _priority_for_event(row: sqlite3.Row) -> int:
@@ -225,7 +245,7 @@ def _priority_for_event(row: sqlite3.Row) -> int:
     return 55
 
 
-def _next_stage(stage: str, speech: str, proposed: Any, beat_count: int) -> str:
+def _next_stage(stage: str, speech: str, proposed: Any, beat_count: int, stalled_turns: int = 0) -> str:
     text = speech.lower()
     has_action = isinstance(proposed, dict) and bool(proposed.get("type"))
     if stage == "introduced":
@@ -243,7 +263,7 @@ def _next_stage(stage: str, speech: str, proposed: Any, beat_count: int) -> str:
     if stage == "committed":
         return "executing"
     if stage == "executing":
-        if _contains_resolution(text):
+        if _contains_resolution(text) or stalled_turns >= PARK_AFTER:
             return "resolved"
         return "executing"
     return stage
@@ -289,7 +309,10 @@ def _contains_resolution(text: str) -> bool:
 
 
 def _looks_like_question(text: str) -> bool:
-    return _contains_any(text, ("?", "？", "吗", "么", "怎么", "多少", "谁", "哪", "为什么", "能不能", "要不要"))
+    stripped = text.strip()
+    if stripped.endswith(("?", "？")):
+        return True
+    return stripped.startswith(("谁", "哪", "为什么", "能不能", "要不要"))
 
 
 def _contains_any(text: str, markers: tuple[str, ...]) -> bool:

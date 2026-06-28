@@ -23,7 +23,7 @@ python -m venv .venv
 .venv\Scripts\activate      # Windows
 # source .venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
-python run.py               # 启动 FastAPI 服务器 (http://localhost:8000)
+python run.py               # 启动 FastAPI 服务器 (http://localhost:8010)
 ```
 
 **前端开发**:
@@ -44,8 +44,8 @@ npm run build               # 构建生产版本
 ### API 端点
 
 后端运行后访问:
-- `http://localhost:8000/docs` - Swagger UI 文档
-- `http://localhost:8000/redoc` - ReDoc 文档
+- `http://localhost:8010/docs` - Swagger UI 文档
+- `http://localhost:8010/redoc` - ReDoc 文档
 
 ## 核心架构
 
@@ -287,5 +287,5 @@ LLM 产出的 delta 只允许修改以下字段(见 `docs/01_数据库设计.md`
 
 1. **数据库初始化**: 首次运行时数据库会自动创建在 `backend/data/agentopia.sqlite3`,但需要通过 API 或手动添加 attribute_defs/trait_defs/characters
 2. **LLM 连接**: 确保 LM Studio 或兼容的 OpenAI API 服务正在运行
-3. **动态 schema**: 属性和特质可通过 API 动态管理,参考 `http://localhost:8000/docs` 了解可用接口
+3. **动态 schema**: 属性和特质可通过 API 动态管理,参考 `http://localhost:8010/docs` 了解可用接口
 4. **数据目录**: `backend/data/` 已在 .gitignore 中,不会提交到仓库

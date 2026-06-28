@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.db import connect, loads, reset_character_state, seed_demo  # noqa: E402
 from app.engine import step_once  # noqa: E402
+from app.scheduler import list_open_scenes  # noqa: E402
 
 
 GREY = "\033[90m"
@@ -50,6 +51,34 @@ def _world(conn) -> dict:
         "SELECT sim_tick, day, period, weather, tension, economy_index, drama FROM world_state WHERE id = 1"
     ).fetchone()
     return dict(row) if row else {}
+
+
+def _threads(conn) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT title, status, stage, stalled_turns, beat_count
+        FROM story_threads
+        WHERE status IN ('active', 'parked')
+        ORDER BY updated_tick DESC, id DESC
+        LIMIT 5
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _open_scenes(conn) -> list[dict]:
+    scenes = list_open_scenes(conn)
+    names = {
+        row["id"]: row["name"]
+        for row in conn.execute("SELECT id, name FROM locations").fetchall()
+    }
+    return [
+        {
+            **scene,
+            "location_name": names.get(scene["location_id"], scene["location_id"]),
+        }
+        for scene in scenes
+    ]
 
 
 def print_header(conn) -> None:
@@ -112,6 +141,20 @@ def print_tick(conn, result: dict, names: dict[str, str]) -> None:
         print(f"   {GREEN}裁决({ok})：{'，'.join(parts)}{RESET}")
     else:
         print(f"   {GREY}裁决({ok})：本拍无数值变化{RESET}")
+    threads = _threads(conn)
+    if threads:
+        thread_text = "；".join(
+            f"{item['title']}[{item['status']}/{item['stage']}/stalled={item.get('stalled_turns', 0)}/beats={item.get('beat_count', 0)}]"
+            for item in threads
+        )
+        print(f"   {DIM}线程: {thread_text}{RESET}")
+    scenes = _open_scenes(conn)
+    if scenes:
+        scene_text = "；".join(
+            f"{item['location_name'] or item['location_id']}#s{item['id']}({len(item['participants'])}人/t{item['turn_count']})"
+            for item in scenes
+        )
+        print(f"   {DIM}场景: {scene_text}{RESET}")
     print()
 
 

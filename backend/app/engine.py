@@ -11,6 +11,7 @@ from .judge import adjudicate_action
 from .llm import chat_json
 from .prompts import build_character_prompt
 from .scheduler import (
+    apply_local_action_effects,
     conversation_prompt_slice,
     current_or_open_scene,
     finish_turn,
@@ -60,8 +61,13 @@ def run_character_action(
         active_story_threads=active_threads,
         situation=situation,
     )
-    result = chat_json(system=system, user=user, temperature=0.85, max_tokens=1024)
-    action, warnings = filter_action(result["parsed"], set(present))
+    result, action, warnings = _generate_character_action(
+        system=system,
+        user=user,
+        char_id=char_id,
+        present=set(present),
+        location_ids=_location_ids_from_scene_slice(scene_slice),
+    )
     usage = result["usage"]
     log_id = append_action_log(
         conn,
@@ -89,6 +95,14 @@ def run_character_action(
             content=str(action["speech"]),
             action=action,
         )
+    local_effect = None
+    if scene is not None:
+        local_effect = apply_local_action_effects(
+            conn,
+            scene=scene,
+            actor_id=char_id,
+            action=action,
+        )
     return {
         "log_id": log_id,
         "actor_id": char_id,
@@ -97,7 +111,67 @@ def run_character_action(
         "warnings": warnings,
         "usage": usage,
         "thread_update": thread_update,
+        "local_effect": local_effect,
     }
+
+
+def _generate_character_action(
+    *,
+    system: str,
+    user: str,
+    char_id: str,
+    present: set[str],
+    location_ids: set[str],
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    attempts = [
+        user,
+        user + "\n上一轮角色回复不合格。请重新返回 ACTION JSON：speech 必须承接上下文、包含具体信息或具体行动，不要空泛寒暄、不要复读短句。",
+    ]
+    errors: list[str] = []
+    for index, prompt in enumerate(attempts):
+        try:
+            result = chat_json(system=system, user=prompt, temperature=0.85 if index == 0 else 0.72, max_tokens=1024)
+            action, warnings = filter_action(result["parsed"], present, location_ids)
+            if action.get("to") == char_id:
+                action["to"] = None
+                warnings.append("self-addressed to cleared")
+            _validate_character_action(action)
+            return result, action, warnings
+        except Exception as exc:
+            errors.append(str(exc))
+    raise ValueError("角色行动生成失败: " + "; ".join(errors[-2:]))
+
+
+def _location_ids_from_scene_slice(scene_slice: dict[str, Any] | None) -> set[str]:
+    if scene_slice is None:
+        return set()
+    locations = scene_slice.get("available_locations")
+    if not isinstance(locations, list):
+        return set()
+    ids: set[str] = set()
+    for item in locations:
+        if isinstance(item, dict) and isinstance(item.get("id"), str):
+            ids.add(item["id"])
+    return ids
+
+
+def _validate_character_action(action: dict[str, Any]) -> None:
+    speech = str(action.get("speech") or "").strip()
+    compact = "".join(char for char in speech if "\u4e00" <= char <= "\u9fff")
+    hollow = {
+        "你在干嘛",
+        "你想干什么",
+        "嘿来生",
+        "怎么了",
+        "发生什么",
+        "什么意思",
+    }
+    if compact in hollow:
+        raise ValueError("角色 speech 过于空泛")
+    if len(compact) < 6 and action.get("action") is None:
+        raise ValueError("角色 speech 过短且没有行动")
+    if speech.count("…") + speech.count(".") > max(3, len(speech) // 4):
+        raise ValueError("角色 speech 含异常省略或乱码")
 
 def step_once(conn: sqlite3.Connection, situation: str | None = None) -> dict[str, Any]:
     tick = advance_tick(conn)
@@ -108,7 +182,7 @@ def step_once(conn: sqlite3.Connection, situation: str | None = None) -> dict[st
     result = run_character_action(
         conn,
         actor_id,
-        situation or _turn_situation(events, active_threads) or "来生酒吧进入夜间高峰，每个人都在等待机会或者躲避麻烦。是时候采取行动了。",
+        situation or _turn_situation(events, active_threads) or "",
         scene,
     )
     verdict = adjudicate_action(conn, actor_id=actor_id, action=result["action"], scene=scene)
@@ -116,7 +190,7 @@ def step_once(conn: sqlite3.Connection, situation: str | None = None) -> dict[st
     verdict_log_id = append_verdict_log(
         conn,
         "JUDGE",
-        summarize_applied(applied, conn),
+        str(verdict["narration"]),
         applied,
         int(scene["id"]),
     )
@@ -164,7 +238,7 @@ def summarize_applied(applied: list[dict[str, Any]], conn: sqlite3.Connection | 
         if item.get("status") == "applied" and item.get("old") != item.get("new")
     ]
     if not successful:
-        return "裁定完成，本拍无数值变化。"
+        return ""
     parts: list[str] = []
     name_cache = _character_name_map(conn) if conn is not None else {}
     for item in successful[:3]:

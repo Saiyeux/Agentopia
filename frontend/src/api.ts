@@ -43,7 +43,11 @@ export type WorldState = {
   log_count: number;
   active_threads: Array<Record<string, unknown>>;
   worldview: string;
-  current_scene: {
+  current_scene: SceneSummary | null;
+  open_scenes: SceneSummary[];
+};
+
+export type SceneSummary = {
     id: number;
     location_id: string;
     title: string;
@@ -53,7 +57,6 @@ export type WorldState = {
     turn_count: number;
     status: string;
     state: Record<string, unknown>;
-  } | null;
 };
 
 export type SceneLog = {

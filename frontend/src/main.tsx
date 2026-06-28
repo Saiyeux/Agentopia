@@ -282,7 +282,7 @@ function App() {
 
       <section className="dashboard">
         {activeTab === "world" ? (
-          <WorldPanel world={state.world} loading={state.loading} />
+          <WorldPanel actorNames={actorNames} world={state.world} loading={state.loading} />
         ) : null}
         {activeTab === "characters" ? (
           <CharactersPanel
@@ -331,9 +331,11 @@ function TabButton({
 }
 
 function WorldPanel({
+  actorNames,
   world,
   loading
 }: {
+  actorNames: Record<string, string>;
   world: WorldState | null;
   loading: boolean;
 }) {
@@ -365,6 +367,20 @@ function WorldPanel({
                 #{world.current_scene.id} · {world.current_scene.turn_count}/{world.current_scene.turn_budget} ·{" "}
                 {world.current_scene.participants.length} 人
               </small>
+            </div>
+          ) : null}
+          {world.open_scenes?.length ? (
+            <div className="scene-list">
+              <h3>活跃场景</h3>
+              {world.open_scenes.map((scene) => (
+                <div className="scene-row" key={scene.id}>
+                  <div>
+                    <strong>{scene.title || scene.location_id}</strong>
+                    <small>{scene.participants.map((id) => actorNames[id] || id).join(" / ")}</small>
+                  </div>
+                  <span>#{scene.id} · {scene.participants.length} 人 · {scene.turn_count}/{scene.turn_budget}</span>
+                </div>
+              ))}
             </div>
           ) : null}
           <div className="threads">

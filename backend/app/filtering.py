@@ -3,7 +3,23 @@ from __future__ import annotations
 from typing import Any
 
 
-ALLOWED_ACTION_TYPES = {"buy", "give", "attack", "work", "move", "exit", "custom"}
+ALLOWED_ACTION_TYPES = {
+    "ask",
+    "help",
+    "talk",
+    "inspect",
+    "repair",
+    "take",
+    "buy",
+    "sell",
+    "give",
+    "attack",
+    "argue",
+    "work",
+    "move",
+    "exit",
+    "custom",
+}
 BAD_TEXT_MARKERS = (
     "<start>",
     "analysis",
@@ -19,7 +35,11 @@ BAD_TEXT_MARKERS = (
 )
 
 
-def filter_action(action: dict[str, Any], present_ids: set[str]) -> tuple[dict[str, Any], list[str]]:
+def filter_action(
+    action: dict[str, Any],
+    present_ids: set[str],
+    location_ids: set[str] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
     """Clamp model ACTION JSON to the current scene's known entities."""
     warnings: list[str] = []
     filtered = {
@@ -52,7 +72,11 @@ def filter_action(action: dict[str, Any], present_ids: set[str]) -> tuple[dict[s
         action_type = "custom"
 
     target = proposed_action.get("target")
-    if target is not None and target not in present_ids:
+    if action_type == "move":
+        if target is not None and target not in (location_ids or set()):
+            warnings.append(f"invalid move target={target} cleared")
+            target = None
+    elif target is not None and target not in present_ids:
         warnings.append(f"invalid target={target} cleared")
         target = None
 

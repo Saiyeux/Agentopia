@@ -7,7 +7,9 @@
 4. LLM 必须返回 ACTION JSON：`speech`, `inner`, `action`, `to`, `topic`。
 5. `filter_action` 会检查 JSON 字段、目标角色是否在场、文本是否可显示。
 6. 合格 speech 写入 `scene_log(type='speech')`。
-7. 如果有活动剧情线，`record_thread_turn` 会根据 speech/action 推进剧情阶段；只有明确完成、失败、放弃、交付或撤离才收束。
+7. 如果有活动剧情线，`record_thread_turn` 会根据 speech/action 推进剧情阶段；阶段变化会清空 `stalled_turns`，无进展会累加。
+8. 线程停滞达到阈值后会变成 `parked`，不删除，但不再被每拍强推。
+9. `to` 表示这句话直接对谁说；被点名角色下一拍会被 scheduler 优先选中回应。`heard_by` 表示同场景里谁听见了这句话。
 
 ## 裁定层
 1. 后端把本拍 action、当前 scene、在场角色、最近事件交给裁定层。
@@ -22,6 +24,11 @@
 4. 不合法 delta 被拒绝，合法 delta 写入 SQLite。
 5. 裁定结果写入 `scene_log(type='verdict')`，前端把它挂在对应 speech 后面显示。
 
+## 对话接力
+1. `record_scene_turn` 会保存上一句的 speaker、recipient、topic、heard_by。
+2. 下一拍 `pick_next_actor` 优先选择上一句的 recipient；没有明确 recipient 时才按场景轮转。
+3. 角色 prompt 中会包含 `dialogue_context.directed_to_me / overheard / not_heard`，帮助模型区分“该回应我”还是“我只是旁听”。
+
 ## 开场层
 1. 后端读取当前 world、scene location、地点状态、最近 narration。
 2. 后端读取 `opening_system.md`，要求 LLM 返回 `{"opening":"..."}`。
@@ -29,4 +36,9 @@
 4. 合格 opening 写入 `scene_log(type='narration')`。
 
 ## 世界事件
-目前世界事件主要由本地事件系统按条件、权重、冷却触发，写入 `event_instances` 和 `scene_log(type='event')`。后续如果接世界层 LLM，应同样走 JSON 契约、白名单校验和 SQLite 落库。
+1. 本地事件系统只负责判断哪个事件类型被触发：条件、权重、冷却、target_need。
+2. `event_defs.narration` 不作为展示内容使用；当前库中应保持为空。
+3. 事件触发后，后端读取 `world_system.md`，把 event_def 的结构意图、当前 scene、world 和最近日志交给世界层 LLM。
+4. 世界层 LLM 必须返回 `{"narration":"..."}`。
+5. narration 为空、像英文分析、复述任务、或照抄 event_def/guidance，都会被拒绝并报错；不会写入 `scene_log`。
+6. 合格 narration 写入 `event_instances` 和 `scene_log(type='event')`。
